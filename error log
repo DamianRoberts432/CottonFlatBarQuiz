@@ -1,0 +1,4 @@
+ File "/home/d/Desktop/Quiz.py", line 15
+    "votes":,
+           ^
+SyntaxError: expression expected after dictionary key and ':'
