@@ -6,30 +6,43 @@ from flask import Flask, request, jsonify
 app = Flask(__name__)
 ADMIN_PIN = "1346"
 
-# Database structure stored in RAM with correct vote array counters
+# Database structure stored in RAM with vote array counters
 question_database = [
     {
         "id": 0,
         "text": "What is your primary motivation for going out tonight?",
-        "choices": ["A) To meet new people", "B) Catch up with old friends", "C) Just wanted a drink / vibe"],
-        "votes":,
+        "choices": [
+            "A) To meet new people",
+            "B) Catch up with old friends",
+            "C) Just wanted a drink / vibe"
+        ],
+        "votes": [0, 0, 0],
         "status": 0
     },
     {
         "id": 1,
         "text": "What is your absolute biggest social dealbreaker in a new person?",
-        "choices": ["A) Constantly checking their phone", "B) Being rude to service staff", "C) Bragging about money or status"],
-        "votes":,
+        "choices": [
+            "A) Constantly checking their phone",
+            "B) Being rude to service staff",
+            "C) Bragging about money or status"
+        ],
+        "votes": [0, 0, 0],
         "status": 0
     },
     {
         "id": 2,
         "text": "What rule or social norm would you break if nobody would ever find out?",
-        "choices": ["A) A financial / tax law", "B) A major social etiquette rule", "C) An employment contract / policy"],
-        "votes":,
+        "choices": [
+            "A) A financial / tax law",
+            "B) A major social etiquette rule",
+            "C) An employment contract / policy"
+        ],
+        "votes": [0, 0, 0],
         "status": 0
     }
 ]
+
 INDEX_HTML = """
 <!DOCTYPE html>
 <html>
@@ -37,27 +50,102 @@ INDEX_HTML = """
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Cotton Flat Bar Quiz</title>
     <style>
-        body { font-family: Arial, sans-serif; background: #121212; color: #e0e0e0; text-align: center; padding: 20px; }
-        .card { background: #1e1e1e; padding: 20px; border-radius: 10px; box-shadow: 0 4px 10px rgba(0,0,0,0.5); max-width: 500px; margin: auto; }
-        button { display: block; width: 100%; padding: 15px; margin: 10px 0; background: #3498db; color: white; border: none; border-radius: 5px; font-size: 16px; cursor: pointer; }
-        button:hover { background: #2980b9; }
-        input { width: 90%; padding: 10px; margin: 10px 0; background: #333; color: #fff; border: 1px solid #555; border-radius: 5px; }
-        .hidden { display: none; }
-        .chart-bar { background: #2ecc71; height: 20px; margin: 5px 0; border-radius: 3px; text-align: right; padding-right: 5px; color: black; font-size: 12px; }
-        .nav-btn { background: #555; font-size: 14px; padding: 10px; }
-        .admin-btn { background: #e74c3c; } .admin-btn:hover { background: #c0392b; }
-        .approve-btn { background: #2ecc71; width: 48%; display: inline-block; }
-        .deny-btn { background: #e74c3c; width: 48%; display: inline-block; }
+        body {
+            font-family: Arial, sans-serif;
+            background: #121212;
+            color: #e0e0e0;
+            text-align: center;
+            padding: 20px;
+        }
+
+        .card {
+            background: #1e1e1e;
+            padding: 20px;
+            border-radius: 10px;
+            box-shadow: 0 4px 10px rgba(0, 0, 0, 0.5);
+            max-width: 500px;
+            margin: auto;
+        }
+
+        button {
+            display: block;
+            width: 100%;
+            padding: 15px;
+            margin: 10px 0;
+            background: #3498db;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            font-size: 16px;
+            cursor: pointer;
+        }
+
+        button:hover {
+            background: #2980b9;
+        }
+
+        input {
+            width: 90%;
+            padding: 10px;
+            margin: 10px 0;
+            background: #333;
+            color: #fff;
+            border: 1px solid #555;
+            border-radius: 5px;
+        }
+
+        .hidden {
+            display: none;
+        }
+
+        .chart-bar {
+            background: #2ecc71;
+            height: 20px;
+            margin: 5px 0;
+            border-radius: 3px;
+            text-align: right;
+            padding-right: 5px;
+            color: black;
+            font-size: 12px;
+        }
+
+        .nav-btn {
+            background: #555;
+            font-size: 14px;
+            padding: 10px;
+        }
+
+        .admin-btn {
+            background: #e74c3c;
+        }
+
+        .admin-btn:hover {
+            background: #c0392b;
+        }
+
+        .approve-btn {
+            background: #2ecc71;
+            width: 48%;
+            display: inline-block;
+        }
+
+        .deny-btn {
+            background: #e74c3c;
+            width: 48%;
+            display: inline-block;
+        }
     </style>
 </head>
 <body>
     <div class="card">
         <h1>Cotton Flat Bar Quiz</h1>
+
         <div id="hub-view">
             <button onclick="startQuiz()">🎯 Take the Quiz</button>
             <button onclick="showView('suggest-view')">✍️ Suggest a Question</button>
             <button onclick="showView('login-view')" class="nav-btn">🔒 Staff Login</button>
         </div>
+
         <div id="quiz-view" class="hidden">
             <h4 id="question-meta" style="color: #bbb;"></h4>
             <h3 id="question-text">Loading...</h3>
@@ -65,12 +153,14 @@ INDEX_HTML = """
             <button id="btn1" onclick="submitAnswer(1)"></button>
             <button id="btn2" onclick="submitAnswer(2)"></button>
         </div>
+
         <div id="results-view" class="hidden">
             <h2>Room Statistics</h2>
             <div id="stats-content">Loading statistics...</div>
             <button class="nav-btn" onclick="nextQuestion()">Next Question ➡️</button>
-            <button class="nav-btn" onclick="showHub()" style="background:#444;">Home Menu</button>
+            <button class="nav-btn" onclick="showHub()" style="background: #444;">Home Menu</button>
         </div>
+
         <div id="suggest-view" class="hidden">
             <h3>Suggest a Question</h3>
             <input type="text" id="suggest-txt" placeholder="Question text..."><br>
@@ -80,187 +170,331 @@ INDEX_HTML = """
             <button onclick="sendSuggestion()">Submit to Limbo Queue</button>
             <button onclick="showHub()" class="nav-btn">Cancel</button>
         </div>
+
         <div id="login-view" class="hidden">
             <h3>Staff Authentication</h3>
             <input type="password" id="pin-input" placeholder="Passcode..."><br>
             <button onclick="attemptLogin()">Unlock Dashboard</button>
             <button onclick="showHub()" class="nav-btn">Back</button>
         </div>
+
         <div id="admin-view" class="hidden">
             <h3>🛡️ Moderation Queue</h3>
             <div id="admin-content">Checking limbo queue...</div>
-            <hr style="border:1px solid #444; margin:20px 0;">
+            <hr style="border: 1px solid #444; margin: 20px 0;">
             <button onclick="resetAllCounters()" class="admin-btn">⚠️ Reset Counters</button>
             <button onclick="showHub()" class="nav-btn">Exit Admin Mode</button>
         </div>
     </div>
-"""
-INDEX_HTML += """
+
     <script>
         let currentQuestionIdx = 0;
         let adminPinToken = "";
+
         function showView(viewId) {
-            ['hub-view', 'quiz-view', 'results-view', 'suggest-view', 'login-view', 'admin-view'].forEach(v => {
-                document.getElementById(v).classList.add('hidden');
+            [
+                "hub-view",
+                "quiz-view",
+                "results-view",
+                "suggest-view",
+                "login-view",
+                "admin-view"
+            ].forEach(view => {
+                document.getElementById(view).classList.add("hidden");
             });
-            document.getElementById(viewId).classList.remove('hidden');
+
+            document.getElementById(viewId).classList.remove("hidden");
         }
-        function showHub() { showView('hub-view'); }
-        function startQuiz() { currentQuestionIdx = 0; loadQuestion(0); }
+
+        function showHub() {
+            showView("hub-view");
+        }
+
+        function startQuiz() {
+            currentQuestionIdx = 0;
+            loadQuestion(0);
+        }
+
         function loadQuestion(idx) {
             currentQuestionIdx = idx;
+
             fetch(`/get_question?id=${idx}`)
                 .then(res => res.json())
                 .then(data => {
-                    if(data.error) {
-                        if(idx === 0) { alert("No active questions!"); showHub(); }
-                        else { loadQuestion(0); }
+                    if (data.error) {
+                        if (idx === 0) {
+                            alert("No active questions!");
+                            showHub();
+                        } else {
+                            loadQuestion(0);
+                        }
                         return;
                     }
-                    showView('quiz-view');
-                    document.getElementById('question-meta').innerText = `Question (${data.id + 1})`;
-                    document.getElementById('question-text').innerText = data.text;
-                    document.getElementById('btn0').innerText = data.choices[0];
-                    document.getElementById('btn1').innerText = data.choices[1];
-                    document.getElementById('btn2').innerText = data.choices[2];
+
+                    showView("quiz-view");
+                    document.getElementById("question-meta").innerText =
+                        `Question (${data.id + 1})`;
+                    document.getElementById("question-text").innerText = data.text;
+                    document.getElementById("btn0").innerText = data.choices[0];
+                    document.getElementById("btn1").innerText = data.choices[1];
+                    document.getElementById("btn2").innerText = data.choices[2];
+
                     currentQuestionIdx = data.id;
                 });
         }
+
         function submitAnswer(choiceIdx) {
             fetch(`/submit?id=${currentQuestionIdx}&choice=${choiceIdx}`)
                 .then(res => res.json())
                 .then(data => {
-                    showView('results-view');
+                    showView("results-view");
+
                     let totalVotes = data.votes.reduce((a, b) => a + b, 0);
                     let html = `<p>Total Votes Logged: <b>${totalVotes}</b></p>`;
-                    let sum = totalVotes || 1; 
-                    for(let j=0; j<3; j++) {
+                    let sum = totalVotes || 1;
+
+                    for (let j = 0; j < 3; j++) {
                         let pct = Math.round((data.votes[j] / sum) * 100);
-                        html += `<div style="text-align:left; margin-top:10px;">Option ${j+1}: <b>${data.votes[j]} votes</b> (${pct}%)</div>`;
-                        html += `<div class="chart-bar" style="width: ${pct}%">${pct}%</div>`;
+
+                        html += `
+                            <div style="text-align: left; margin-top: 10px;">
+                                Option ${j + 1}: <b>${data.votes[j]} votes</b> (${pct}%)
+                            </div>
+                        `;
+
+                        html += `
+                            <div class="chart-bar" style="width: ${pct}%">
+                                ${pct}%
+                            </div>
+                        `;
                     }
-                    document.getElementById('stats-content').innerHTML = html;
+
+                    document.getElementById("stats-content").innerHTML = html;
                 });
         }
-        function nextQuestion() { loadQuestion(currentQuestionIdx + 1); }
+
+        function nextQuestion() {
+            loadQuestion(currentQuestionIdx + 1);
+        }
+
         function sendSuggestion() {
-            let txt = encodeURIComponent(document.getElementById('suggest-txt').value);
-            let c0 = encodeURIComponent(document.getElementById('suggest-c0').value);
-            let c1 = encodeURIComponent(document.getElementById('suggest-c1').value);
-            let c2 = encodeURIComponent(document.getElementById('suggest-c2').value);
-            fetch(`/suggest?text=${txt}&c0=${c0}&c1=${c1}&c2=${c2}`).then(res => {
-                alert("Question submitted to Limbo!");
-                document.getElementById('suggest-txt').value = "";
-                showHub();
-            });
+            let txt = encodeURIComponent(document.getElementById("suggest-txt").value);
+            let c0 = encodeURIComponent(document.getElementById("suggest-c0").value);
+            let c1 = encodeURIComponent(document.getElementById("suggest-c1").value);
+            let c2 = encodeURIComponent(document.getElementById("suggest-c2").value);
+
+            fetch(`/suggest?text=${txt}&c0=${c0}&c1=${c1}&c2=${c2}`)
+                .then(() => {
+                    alert("Question submitted to Limbo!");
+                    document.getElementById("suggest-txt").value = "";
+                    document.getElementById("suggest-c0").value = "";
+                    document.getElementById("suggest-c1").value = "";
+                    document.getElementById("suggest-c2").value = "";
+                    showHub();
+                });
         }
+
         function attemptLogin() {
-            let pin = document.getElementById('pin-input').value;
-            fetch(`/admin_login?pin=${pin}`).then(res => res.json()).then(data => {
-                if(data.success) { adminPinToken = pin; loadAdminDashboard(); }
-                else { alert("Invalid Pin!"); }
-            });
+            let pin = document.getElementById("pin-input").value;
+
+            fetch(`/admin_login?pin=${pin}`)
+                .then(res => res.json())
+                .then(data => {
+                    if (data.success) {
+                        adminPinToken = pin;
+                        loadAdminDashboard();
+                    } else {
+                        alert("Invalid Pin!");
+                    }
+                });
         }
+
         function loadAdminDashboard() {
-            fetch(`/admin_get_limbo?pin=${adminPinToken}`).then(res => res.json()).then(data => {
-                showView('admin-view');
-                if(data.id === -1) {
-                    document.getElementById('admin-content').innerHTML = "<p>🎉 Limbo queue is empty.</p>";
-                    return;
-                }
-                let html = `<h4>Reviewing ID: ${data.id}</h4>`;
-                html += `<p style="background:#333; padding:10px; border-radius:5px;"><b>${data.text}</b></p>`;
-                html += `<ul><li>${data.choices[0]}</li><li>${data.choices[1]}</li><li>${data.choices[2]}</li></ul>`;
-                html += `<button class="approve-btn" onclick="modAction(${data.id}, 0)">Approve ✅</button> `;
-                html += `<button class="deny-btn" onclick="modAction(${data.id}, 2)">Deny ❌</button>`;
-                document.getElementById('admin-content').innerHTML = html;
-            });
+            fetch(`/admin_get_limbo?pin=${adminPinToken}`)
+                .then(res => res.json())
+                .then(data => {
+                    showView("admin-view");
+
+                    if (data.id === -1) {
+                        document.getElementById("admin-content").innerHTML =
+                            "<p>🎉 Limbo queue is empty.</p>";
+                        return;
+                    }
+
+                    let html = `<h4>Reviewing ID: ${data.id}</h4>`;
+                    html += `
+                        <p style="background: #333; padding: 10px; border-radius: 5px;">
+                            <b>${data.text}</b>
+                        </p>
+                    `;
+                    html += `
+                        <ul>
+                            <li>${data.choices[0]}</li>
+                            <li>${data.choices[1]}</li>
+                            <li>${data.choices[2]}</li>
+                        </ul>
+                    `;
+                    html += `
+                        <button class="approve-btn" onclick="modAction(${data.id}, 0)">
+                            Approve ✅
+                        </button>
+                    `;
+                    html += `
+                        <button class="deny-btn" onclick="modAction(${data.id}, 2)">
+                            Deny ❌
+                        </button>
+                    `;
+
+                    document.getElementById("admin-content").innerHTML = html;
+                });
         }
+
         function modAction(qId, actionType) {
-            fetch(`/admin_mod?pin=${adminPinToken}&id=${qId}&status=${actionType}`).then(res => {
-                alert(actionType === 0 ? "Approved!" : "Denied.");
-                loadAdminDashboard();
-            });
+            fetch(`/admin_mod?pin=${adminPinToken}&id=${qId}&status=${actionType}`)
+                .then(() => {
+                    alert(actionType === 0 ? "Approved!" : "Denied.");
+                    loadAdminDashboard();
+                });
         }
+
         function resetAllCounters() {
-            if(confirm("Wipe all data counters?")) {
-                fetch(`/admin_clear_stats?pin=${adminPinToken}`).then(res => { alert("Wiped!"); showHub(); });
+            if (confirm("Wipe all data counters?")) {
+                fetch(`/admin_clear_stats?pin=${adminPinToken}`)
+                    .then(() => {
+                        alert("Wiped!");
+                        showHub();
+                    });
             }
         }
     </script>
 </body>
 </html>
 """
+
 @app.route("/")
 def home():
     return INDEX_HTML
 
+
 @app.route("/get_question")
 def get_question():
     target_id = int(request.args.get("id", 0))
-    for q in question_database[target_id:]:
-        if q["status"] == 0:
-            return jsonify({"id": q["id"], "text": q["text"], "choices": q["choices"]})
+
+    for question in question_database[target_id:]:
+        if question["status"] == 0:
+            return jsonify({
+                "id": question["id"],
+                "text": question["text"],
+                "choices": question["choices"]
+            })
+
     return jsonify({"error": True})
+
 
 @app.route("/submit")
 def submit():
     q_id = int(request.args.get("id", 0))
     choice = int(request.args.get("choice", 0))
+
     if 0 <= q_id < len(question_database) and 0 <= choice < 3:
         question_database[q_id]["votes"][choice] += 1
-    return jsonify({"votes": question_database[q_id]["votes"]})
+        return jsonify({"votes": question_database[q_id]["votes"]})
+
+    return jsonify({"error": "Invalid question or choice"}), 400
+
 
 @app.route("/suggest")
 def suggest():
     new_id = len(question_database)
+
     question_database.append({
         "id": new_id,
         "text": request.args.get("text"),
-        "choices": [request.args.get("c0"), request.args.get("c1"), request.args.get("c2")],
-        "votes":,
+        "choices": [
+            request.args.get("c0"),
+            request.args.get("c1"),
+            request.args.get("c2")
+        ],
+        "votes": [0, 0, 0],
         "status": 1
     })
+
     return "OK"
+
+
 @app.route("/admin_login")
 def admin_login():
-    return jsonify({"success": request.args.get("pin") == ADMIN_PIN})
+    return jsonify({
+        "success": request.args.get("pin") == ADMIN_PIN
+    })
+
 
 @app.route("/admin_get_limbo")
 def admin_get_limbo():
-    if request.args.get("pin") != ADMIN_PIN: return "Denied", 403
-    for q in question_database:
-        if q["status"] == 1:
-            return jsonify({"id": q["id"], "text": q["text"], "choices": q["choices"]})
+    if request.args.get("pin") != ADMIN_PIN:
+        return "Denied", 403
+
+    for question in question_database:
+        if question["status"] == 1:
+            return jsonify({
+                "id": question["id"],
+                "text": question["text"],
+                "choices": question["choices"]
+            })
+
     return jsonify({"id": -1})
+
 
 @app.route("/admin_mod")
 def admin_mod():
-    if request.args.get("pin") != ADMIN_PIN: return "Denied", 403
+    if request.args.get("pin") != ADMIN_PIN:
+        return "Denied", 403
+
     q_id = int(request.args.get("id"))
     status = int(request.args.get("status"))
+
+    if not 0 <= q_id < len(question_database):
+        return "Invalid question ID", 400
+
+    if status not in [0, 2]:
+        return "Invalid status", 400
+
     question_database[q_id]["status"] = status
+
     return "OK"
+
 
 @app.route("/admin_clear_stats")
 def admin_clear_stats():
-    if request.args.get("pin") != ADMIN_PIN: return "Denied", 403
-    for q in question_database:
-        q["votes"] = [0, 0, 0]
+    if request.args.get("pin") != ADMIN_PIN:
+        return "Denied", 403
+
+    for question in question_database:
+        question["votes"] = [0, 0, 0]
+
     return "OK"
+
 
 def handle_serial_input():
     try:
-        ser = serial.Serial('/dev/ttyUSB0', 115200, timeout=1)
+        ser = serial.Serial("/dev/ttyUSB0", 115200, timeout=1)
+
         while True:
-            line = ser.readline().decode('utf-8').strip()
+            line = ser.readline().decode("utf-8").strip()
+
             if line.startswith("SUBMIT:"):
                 parts = line.split(":")
-                q_id, choice = int(parts[1]), int(parts[2])
-                if 0 <= q_id < len(question_database) and 0 <= choice < 3:
-                    question_database[q_id]["votes"][choice] += 1
-    except Exception as e:
-        pass
+
+                if len(parts) == 3:
+                    q_id = int(parts[1])
+                    choice = int(parts[2])
+
+                    if 0 <= q_id < len(question_database) and 0 <= choice < 3:
+                        question_database[q_id]["votes"][choice] += 1
+
+    except Exception as error:
+        print(f"Serial input is unavailable: {error}")
+
 
 if __name__ == "__main__":
     threading.Thread(target=handle_serial_input, daemon=True).start()
