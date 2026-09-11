@@ -6,7 +6,7 @@ from flask import Flask, request, jsonify
 app = Flask(__name__)
 ADMIN_PIN = "1346"
 
-# Database structure stored in RAM
+# Database structure stored in RAM with correct vote array counters
 question_database = [
     {
         "id": 0,
