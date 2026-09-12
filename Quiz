@@ -205,7 +205,7 @@ def submit_answer():
         
         total = sum(counts.values()) or 1
         content = "<h2>All-Time Distribution:</h2><div class='left'>"
-        for i in: # Fixed dictionary key syntax loop context tracker
+        for i in [1, 2, 3, 4]:
             op = q[f"op{i}"]
             n = counts[i]
             pct = int((n * 100) / total)
