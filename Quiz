@@ -1,501 +1,477 @@
-import json
-import serial
-import threading
-from flask import Flask, request, jsonify
+from flask import Flask, request, session, redirect, url_for, render_template_string
+import sqlite3
+import os
+import random
+from datetime import datetime
 
 app = Flask(__name__)
-ADMIN_PIN = "1346"
+app.secret_key = "change-this-secret-key"
+DB_PATH = "quiz.db"
+ADMIN_PASS = "1346"
 
-# Database structure stored in RAM with vote array counters
-question_database = [
-    {
-        "id": 0,
-        "text": "What is your primary motivation for going out tonight?",
-        "choices": [
-            "A) To meet new people",
-            "B) Catch up with old friends",
-            "C) Just wanted a drink / vibe"
-        ],
-        "votes": [0, 0, 0],
-        "status": 0
-    },
-    {
-        "id": 1,
-        "text": "What is your absolute biggest social dealbreaker in a new person?",
-        "choices": [
-            "A) Constantly checking their phone",
-            "B) Being rude to service staff",
-            "C) Bragging about money or status"
-        ],
-        "votes": [0, 0, 0],
-        "status": 0
-    },
-    {
-        "id": 2,
-        "text": "What rule or social norm would you break if nobody would ever find out?",
-        "choices": [
-            "A) A financial / tax law",
-            "B) A major social etiquette rule",
-            "C) An employment contract / policy"
-        ],
-        "votes": [0, 0, 0],
-        "status": 0
-    }
-]
+# -------------------------
+# DB Helpers
+# -------------------------
+def db_conn():
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    return conn
 
-INDEX_HTML = """
-<!DOCTYPE html>
-<html>
-<head>
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Cotton Flat Bar Quiz</title>
-    <style>
-        body {
-            font-family: Arial, sans-serif;
-            background: #121212;
-            color: #e0e0e0;
-            text-align: center;
-            padding: 20px;
-        }
+def init_db():
+    conn = db_conn()
+    c = conn.cursor()
 
-        .card {
-            background: #1e1e1e;
-            padding: 20px;
-            border-radius: 10px;
-            box-shadow: 0 4px 10px rgba(0, 0, 0, 0.5);
-            max-width: 500px;
-            margin: auto;
-        }
+    c.execute("""
+    CREATE TABLE IF NOT EXISTS questions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        text TEXT NOT NULL,
+        is_open_text INTEGER NOT NULL DEFAULT 1,
+        op1 TEXT DEFAULT '',
+        op2 TEXT DEFAULT '',
+        op3 TEXT DEFAULT '',
+        op4 TEXT DEFAULT '',
+        approved INTEGER NOT NULL DEFAULT 1,
+        created_at TEXT NOT NULL
+    )
+    """)
 
-        button {
-            display: block;
-            width: 100%;
-            padding: 15px;
-            margin: 10px 0;
-            background: #3498db;
-            color: white;
-            border: none;
-            border-radius: 5px;
-            font-size: 16px;
-            cursor: pointer;
-        }
+    c.execute("""
+    CREATE TABLE IF NOT EXISTS votes (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        question_id INTEGER NOT NULL,
+        choice INTEGER NOT NULL,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY(question_id) REFERENCES questions(id)
+    )
+    """)
 
-        button:hover {
-            background: #2980b9;
-        }
+    c.execute("""
+    CREATE TABLE IF NOT EXISTS text_responses (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        question_id INTEGER NOT NULL,
+        author TEXT NOT NULL DEFAULT 'Anonymous',
+        message TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY(question_id) REFERENCES questions(id)
+    )
+    """)
 
-        input {
-            width: 90%;
-            padding: 10px;
-            margin: 10px 0;
-            background: #333;
-            color: #fff;
-            border: 1px solid #555;
-            border-radius: 5px;
-        }
+    c.execute("""
+    CREATE TABLE IF NOT EXISTS suggestions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        text TEXT NOT NULL,
+        is_open_text INTEGER NOT NULL,
+        op1 TEXT DEFAULT '',
+        op2 TEXT DEFAULT '',
+        op3 TEXT DEFAULT '',
+        op4 TEXT DEFAULT '',
+        created_at TEXT NOT NULL
+    )
+    """)
 
-        .hidden {
-            display: none;
-        }
+    # Seed with a few starter prompts if empty
+    count = c.execute("SELECT COUNT(*) AS n FROM questions WHERE approved=1").fetchone()["n"]
+    if count == 0:
+        seed_questions = [
+            ("If your unedited web search history from the past year was put on a billboard, what would require the longest explanation?", 1, "", "", "", ""),
+            ("You make accidental eye contact with a stranger on a crowded subway. What is your automatic behavioral coping mechanism?", 0,
+             "Look down and scroll on your phone.",
+             "Smile awkwardly and look away.",
+             "Double down and stare back aggressively.",
+             "Pretend you didn't even notice."),
+            ("What is the most socially acceptable lie that everyone tells almost daily?", 1, "", "", "", ""),
+            ("You hear your own voice on a recorded audio message. What is your reaction?", 0,
+             "Absolute disgust and instant denial.",
+             "Acceptance, I sound completely normal.",
+             "Confusion, that cannot be what I sound like.",
+             "Never listening to a voice note ever again.")
+        ]
+        for q in seed_questions:
+            c.execute("""
+                INSERT INTO questions (text, is_open_text, op1, op2, op3, op4, approved, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, 1, ?)
+            """, (*q, datetime.utcnow().isoformat()))
 
-        .chart-bar {
-            background: #2ecc71;
-            height: 20px;
-            margin: 5px 0;
-            border-radius: 3px;
-            text-align: right;
-            padding-right: 5px;
-            color: black;
-            font-size: 12px;
-        }
+    conn.commit()
+    conn.close()
 
-        .nav-btn {
-            background: #555;
-            font-size: 14px;
-            padding: 10px;
-        }
-
-        .admin-btn {
-            background: #e74c3c;
-        }
-
-        .admin-btn:hover {
-            background: #c0392b;
-        }
-
-        .approve-btn {
-            background: #2ecc71;
-            width: 48%;
-            display: inline-block;
-        }
-
-        .deny-btn {
-            background: #e74c3c;
-            width: 48%;
-            display: inline-block;
-        }
-    </style>
-</head>
-<body>
-    <div class="card">
-        <h1>Cotton Flat Bar Quiz</h1>
-
-        <div id="hub-view">
-            <button onclick="startQuiz()">🎯 Take the Quiz</button>
-            <button onclick="showView('suggest-view')">✍️ Suggest a Question</button>
-            <button onclick="showView('login-view')" class="nav-btn">🔒 Staff Login</button>
-        </div>
-
-        <div id="quiz-view" class="hidden">
-            <h4 id="question-meta" style="color: #bbb;"></h4>
-            <h3 id="question-text">Loading...</h3>
-            <button id="btn0" onclick="submitAnswer(0)"></button>
-            <button id="btn1" onclick="submitAnswer(1)"></button>
-            <button id="btn2" onclick="submitAnswer(2)"></button>
-        </div>
-
-        <div id="results-view" class="hidden">
-            <h2>Room Statistics</h2>
-            <div id="stats-content">Loading statistics...</div>
-            <button class="nav-btn" onclick="nextQuestion()">Next Question ➡️</button>
-            <button class="nav-btn" onclick="showHub()" style="background: #444;">Home Menu</button>
-        </div>
-
-        <div id="suggest-view" class="hidden">
-            <h3>Suggest a Question</h3>
-            <input type="text" id="suggest-txt" placeholder="Question text..."><br>
-            <input type="text" id="suggest-c0" placeholder="Option A"><br>
-            <input type="text" id="suggest-c1" placeholder="Option B"><br>
-            <input type="text" id="suggest-c2" placeholder="Option C"><br>
-            <button onclick="sendSuggestion()">Submit to Limbo Queue</button>
-            <button onclick="showHub()" class="nav-btn">Cancel</button>
-        </div>
-
-        <div id="login-view" class="hidden">
-            <h3>Staff Authentication</h3>
-            <input type="password" id="pin-input" placeholder="Passcode..."><br>
-            <button onclick="attemptLogin()">Unlock Dashboard</button>
-            <button onclick="showHub()" class="nav-btn">Back</button>
-        </div>
-
-        <div id="admin-view" class="hidden">
-            <h3>🛡️ Moderation Queue</h3>
-            <div id="admin-content">Checking limbo queue...</div>
-            <hr style="border: 1px solid #444; margin: 20px 0;">
-            <button onclick="resetAllCounters()" class="admin-btn">⚠️ Reset Counters</button>
-            <button onclick="showHub()" class="nav-btn">Exit Admin Mode</button>
-        </div>
-    </div>
-
-    <script>
-        let currentQuestionIdx = 0;
-        let adminPinToken = "";
-
-        function showView(viewId) {
-            [
-                "hub-view",
-                "quiz-view",
-                "results-view",
-                "suggest-view",
-                "login-view",
-                "admin-view"
-            ].forEach(view => {
-                document.getElementById(view).classList.add("hidden");
-            });
-
-            document.getElementById(viewId).classList.remove("hidden");
-        }
-
-        function showHub() {
-            showView("hub-view");
-        }
-
-        function startQuiz() {
-            currentQuestionIdx = 0;
-            loadQuestion(0);
-        }
-
-        function loadQuestion(idx) {
-            currentQuestionIdx = idx;
-
-            fetch(`/get_question?id=${idx}`)
-                .then(res => res.json())
-                .then(data => {
-                    if (data.error) {
-                        if (idx === 0) {
-                            alert("No active questions!");
-                            showHub();
-                        } else {
-                            loadQuestion(0);
-                        }
-                        return;
-                    }
-
-                    showView("quiz-view");
-                    document.getElementById("question-meta").innerText =
-                        `Question (${data.id + 1})`;
-                    document.getElementById("question-text").innerText = data.text;
-                    document.getElementById("btn0").innerText = data.choices[0];
-                    document.getElementById("btn1").innerText = data.choices[1];
-                    document.getElementById("btn2").innerText = data.choices[2];
-
-                    currentQuestionIdx = data.id;
-                });
-        }
-
-        function submitAnswer(choiceIdx) {
-            fetch(`/submit?id=${currentQuestionIdx}&choice=${choiceIdx}`)
-                .then(res => res.json())
-                .then(data => {
-                    showView("results-view");
-
-                    let totalVotes = data.votes.reduce((a, b) => a + b, 0);
-                    let html = `<p>Total Votes Logged: <b>${totalVotes}</b></p>`;
-                    let sum = totalVotes || 1;
-
-                    for (let j = 0; j < 3; j++) {
-                        let pct = Math.round((data.votes[j] / sum) * 100);
-
-                        html += `
-                            <div style="text-align: left; margin-top: 10px;">
-                                Option ${j + 1}: <b>${data.votes[j]} votes</b> (${pct}%)
-                            </div>
-                        `;
-
-                        html += `
-                            <div class="chart-bar" style="width: ${pct}%">
-                                ${pct}%
-                            </div>
-                        `;
-                    }
-
-                    document.getElementById("stats-content").innerHTML = html;
-                });
-        }
-
-        function nextQuestion() {
-            loadQuestion(currentQuestionIdx + 1);
-        }
-
-        function sendSuggestion() {
-            let txt = encodeURIComponent(document.getElementById("suggest-txt").value);
-            let c0 = encodeURIComponent(document.getElementById("suggest-c0").value);
-            let c1 = encodeURIComponent(document.getElementById("suggest-c1").value);
-            let c2 = encodeURIComponent(document.getElementById("suggest-c2").value);
-
-            fetch(`/suggest?text=${txt}&c0=${c0}&c1=${c1}&c2=${c2}`)
-                .then(() => {
-                    alert("Question submitted to Limbo!");
-                    document.getElementById("suggest-txt").value = "";
-                    document.getElementById("suggest-c0").value = "";
-                    document.getElementById("suggest-c1").value = "";
-                    document.getElementById("suggest-c2").value = "";
-                    showHub();
-                });
-        }
-
-        function attemptLogin() {
-            let pin = document.getElementById("pin-input").value;
-
-            fetch(`/admin_login?pin=${pin}`)
-                .then(res => res.json())
-                .then(data => {
-                    if (data.success) {
-                        adminPinToken = pin;
-                        loadAdminDashboard();
-                    } else {
-                        alert("Invalid Pin!");
-                    }
-                });
-        }
-
-        function loadAdminDashboard() {
-            fetch(`/admin_get_limbo?pin=${adminPinToken}`)
-                .then(res => res.json())
-                .then(data => {
-                    showView("admin-view");
-
-                    if (data.id === -1) {
-                        document.getElementById("admin-content").innerHTML =
-                            "<p>🎉 Limbo queue is empty.</p>";
-                        return;
-                    }
-
-                    let html = `<h4>Reviewing ID: ${data.id}</h4>`;
-                    html += `
-                        <p style="background: #333; padding: 10px; border-radius: 5px;">
-                            <b>${data.text}</b>
-                        </p>
-                    `;
-                    html += `
-                        <ul>
-                            <li>${data.choices[0]}</li>
-                            <li>${data.choices[1]}</li>
-                            <li>${data.choices[2]}</li>
-                        </ul>
-                    `;
-                    html += `
-                        <button class="approve-btn" onclick="modAction(${data.id}, 0)">
-                            Approve ✅
-                        </button>
-                    `;
-                    html += `
-                        <button class="deny-btn" onclick="modAction(${data.id}, 2)">
-                            Deny ❌
-                        </button>
-                    `;
-
-                    document.getElementById("admin-content").innerHTML = html;
-                });
-        }
-
-        function modAction(qId, actionType) {
-            fetch(`/admin_mod?pin=${adminPinToken}&id=${qId}&status=${actionType}`)
-                .then(() => {
-                    alert(actionType === 0 ? "Approved!" : "Denied.");
-                    loadAdminDashboard();
-                });
-        }
-
-        function resetAllCounters() {
-            if (confirm("Wipe all data counters?")) {
-                fetch(`/admin_clear_stats?pin=${adminPinToken}`)
-                    .then(() => {
-                        alert("Wiped!");
-                        showHub();
-                    });
-            }
-        }
-    </script>
-</body>
-</html>
+# -------------------------
+# HTML Helpers
+# -------------------------
+BASE_STYLE = """
+<style>
+body{font-family:Arial,sans-serif;background:#f4f4f9;color:#333;padding:20px;text-align:center}
+.card{background:#fff;max-width:760px;margin:0 auto 15px auto;padding:20px;border-radius:10px;box-shadow:0 4px 10px rgba(0,0,0,0.08)}
+a.btn,button.btn{display:block;width:100%;margin:10px 0;padding:12px;border:none;border-radius:6px;background:#007bff;color:white;text-decoration:none;cursor:pointer;font-size:16px;box-sizing:border-box}
+a.btn:hover,button.btn:hover{background:#0056b3}
+.btn-sec{background:#6c757d}
+.btn-sec:hover{background:#50575e}
+.btn-ok{background:#28a745}
+.btn-del{background:#dc3545}
+input,select,textarea{width:100%;padding:10px;margin:8px 0;border:1px solid #ccc;border-radius:6px;box-sizing:border-box}
+.row{display:flex;gap:10px}
+.row > *{flex:1}
+.small{font-size:12px;color:#666}
+.left{text-align:left}
+.resp{padding:10px;border-left:4px solid #007bff;background:#f8f9fa;margin:8px 0;border-radius:0 5px 5px 0}
+hr{margin:20px 0;border:none;border-top:1px solid #eee}
+</style>
 """
 
+def page(title, body):
+    return f"<!doctype html><html><head><meta charset='utf-8'><title>{title}</title>{BASE_STYLE}</head><body><div class='card'>{body}</div></body></html>"
+
+def admin_required():
+    return session.get("is_admin", False)
+
+# -------------------------
+# Routes
+# -------------------------
 @app.route("/")
-def home():
-    return INDEX_HTML
+def menu():
+    body = """
+    <h1>Cotton Flat Quiz</h1>
+    <a class='btn btn-ok' href='/quiz'>Take Quiz</a>
+    <a class='btn' href='/answers'>See Answers</a>
+    <a class='btn btn-sec' href='/submit-question'>Submit Question</a>
+    <hr>
+    <a class='btn' href='/admin'>Admin</a>
+    """
+    return page("Menu", body)
 
+@app.route("/quiz")
+def quiz():
+    conn = db_conn()
+    rows = conn.execute("SELECT * FROM questions WHERE approved=1 ORDER BY RANDOM() LIMIT 1").fetchall()
+    conn.close()
+    if not rows:
+        return page("No Questions", "<h2>No approved questions yet.</h2><a class='btn' href='/'>Back</a>")
 
-@app.route("/get_question")
-def get_question():
-    target_id = int(request.args.get("id", 0))
+    q = rows[0]
+    session["current_qid"] = q["id"]
 
-    for question in question_database[target_id:]:
-        if question["status"] == 0:
-            return jsonify({
-                "id": question["id"],
-                "text": question["text"],
-                "choices": question["choices"]
-            })
+    if q["is_open_text"] == 1:
+        body = f"""
+        <h2>Prompt</h2>
+        <p><b>{q['text']}</b></p>
+        <form method='post' action='/submit-answer'>
+            <input name='author' placeholder='Your name (optional)'>
+            <label class='left'><input type='checkbox' name='post_anonymously' value='1' checked> Post anonymously</label>
+            <textarea name='text_choice' rows='4' placeholder='Type response...' required></textarea>
+            <button class='btn' type='submit'>Submit Response</button>
+        </form>
+        <a class='btn btn-sec' href='/'>Back</a>
+        """
+    else:
+        body = f"""
+        <h2>Prompt</h2>
+        <p><b>{q['text']}</b></p>
+        <form method='post' action='/submit-answer'>
+            <button class='btn' type='submit' name='num_choice' value='1'>{q['op1']}</button>
+            <button class='btn' type='submit' name='num_choice' value='2'>{q['op2']}</button>
+            <button class='btn' type='submit' name='num_choice' value='3'>{q['op3']}</button>
+            <button class='btn' type='submit' name='num_choice' value='4'>{q['op4']}</button>
+        </form>
+        <a class='btn btn-sec' href='/'>Back</a>
+        """
+    return page("Take Quiz", body)
 
-    return jsonify({"error": True})
+@app.route("/submit-answer", methods=["POST"])
+def submit_answer():
+    qid = session.get("current_qid")
+    if not qid:
+        return redirect(url_for("quiz"))
 
+    conn = db_conn()
+    q = conn.execute("SELECT * FROM questions WHERE id=?", (qid,)).fetchone()
 
-@app.route("/submit")
-def submit():
-    q_id = int(request.args.get("id", 0))
-    choice = int(request.args.get("choice", 0))
+    if not q:
+        conn.close()
+        return redirect(url_for("quiz"))
 
-    if 0 <= q_id < len(question_database) and 0 <= choice < 3:
-        question_database[q_id]["votes"][choice] += 1
-        return jsonify({"votes": question_database[q_id]["votes"]})
+    if q["is_open_text"] == 1:
+        msg = (request.form.get("text_choice") or "").strip()
+        if msg:
+            anonymous_checked = request.form.get("post_anonymously") is not None
+            raw_author = (request.form.get("author") or "").strip()
+            author = "Anonymous" if anonymous_checked or not raw_author else raw_author
+            conn.execute("""
+                INSERT INTO text_responses (question_id, author, message, created_at)
+                VALUES (?, ?, ?, ?)
+            """, (qid, author, msg, datetime.utcnow().isoformat()))
+            conn.commit()
 
-    return jsonify({"error": "Invalid question or choice"}), 400
+        rows = conn.execute("""
+            SELECT author, message, created_at FROM text_responses
+            WHERE question_id=?
+            ORDER BY id DESC
+            LIMIT 50
+        """, (qid,)).fetchall()
 
+        content = "<h2>What others wrote</h2>"
+        if not rows:
+            content += "<p>No responses yet.</p>"
+        else:
+            for r in rows:
+                content += f"<div class='resp left'><b>{r['author']}:</b> {r['message']}</div>"
 
-@app.route("/suggest")
-def suggest():
-    new_id = len(question_database)
+    else:
+        choice = request.form.get("num_choice")
+        if choice in {"1", "2", "3", "4"}:
+            conn.execute("""
+                INSERT INTO votes (question_id, choice, created_at)
+                VALUES (?, ?, ?)
+            """, (qid, int(choice), datetime.utcnow().isoformat()))
+            conn.commit()
 
-    question_database.append({
-        "id": new_id,
-        "text": request.args.get("text"),
-        "choices": [
-            request.args.get("c0"),
-            request.args.get("c1"),
-            request.args.get("c2")
-        ],
-        "votes": [0, 0, 0],
-        "status": 1
-    })
+        counts = {1:0,2:0,3:0,4:0}
+        rows = conn.execute("SELECT choice, COUNT(*) AS n FROM votes WHERE question_id=? GROUP BY choice", (qid,)).fetchall()
+        for r in rows:
+            counts[r["choice"]] = r["n"]
+        total = sum(counts.values()) or 1
 
-    return "OK"
+        content = "<h2>Current distribution</h2><div class='left'>"
+        for i in [1,2,3,4]:
+            op = q[f"op{i}"]
+            n = counts[i]
+            pct = int((n*100)/total)
+            content += f"<p><b>{op}</b> — {n} votes ({pct}%)</p>"
+        content += "</div>"
 
+    conn.close()
+    content += "<a class='btn' href='/quiz'>Next Question</a><a class='btn btn-sec' href='/'>Main Menu</a>"
+    return page("Results", content)
 
-@app.route("/admin_login")
-def admin_login():
-    return jsonify({
-        "success": request.args.get("pin") == ADMIN_PIN
-    })
+@app.route("/answers")
+def answers():
+    conn = db_conn()
+    rows = conn.execute("""
+        SELECT tr.id, tr.author, tr.message, tr.created_at, q.text
+        FROM text_responses tr
+        JOIN questions q ON q.id = tr.question_id
+        ORDER BY tr.id DESC
+        LIMIT 200
+    """).fetchall()
+    conn.close()
 
+    body = "<h2>Public Answers Feed</h2>"
+    if not rows:
+        body += "<p>No answers yet.</p>"
+    else:
+        for r in rows:
+            body += f"""
+            <div class='resp left'>
+                <small><b>Prompt:</b> {r['text']}</small><br>
+                <b>{r['author']}:</b> {r['message']}
+            </div>
+            """
+    body += "<a class='btn btn-sec' href='/'>Back</a>"
+    return page("Answers", body)
 
-@app.route("/admin_get_limbo")
-def admin_get_limbo():
-    if request.args.get("pin") != ADMIN_PIN:
-        return "Denied", 403
+@app.route("/submit-question", methods=["GET", "POST"])
+def submit_question():
+    if request.method == "GET":
+        body = """
+        <h2>Submit a Question</h2>
+        <form method='post'>
+            <input name='qtext' placeholder='Question text...' required>
+            <select name='qtype' id='qtype' onchange='toggleOps()'>
+                <option value='text'>Open Text</option>
+                <option value='mc'>Multiple Choice</option>
+            </select>
+            <div id='ops' style='display:none'>
+                <input name='op1' placeholder='Option 1'>
+                <input name='op2' placeholder='Option 2'>
+                <input name='op3' placeholder='Option 3'>
+                <input name='op4' placeholder='Option 4'>
+            </div>
+            <button class='btn btn-ok' type='submit'>Send for Review</button>
+        </form>
+        <a class='btn btn-sec' href='/'>Back</a>
+        <script>
+        function toggleOps(){
+            const v=document.getElementById('qtype').value;
+            document.getElementById('ops').style.display = (v==='mc')?'block':'none';
+        }
+        </script>
+        """
+        return page("Submit Question", body)
 
-    for question in question_database:
-        if question["status"] == 1:
-            return jsonify({
-                "id": question["id"],
-                "text": question["text"],
-                "choices": question["choices"]
-            })
+    qtext = (request.form.get("qtext") or "").strip()
+    qtype = request.form.get("qtype", "text")
+    is_open = 0 if qtype == "mc" else 1
+    op1 = request.form.get("op1", "")
+    op2 = request.form.get("op2", "")
+    op3 = request.form.get("op3", "")
+    op4 = request.form.get("op4", "")
 
-    return jsonify({"id": -1})
+    if not qtext:
+        return page("Error", "<h3>Question text required.</h3><a class='btn' href='/submit-question'>Back</a>")
 
+    conn = db_conn()
+    conn.execute("""
+        INSERT INTO suggestions (text, is_open_text, op1, op2, op3, op4, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+    """, (qtext, is_open, op1, op2, op3, op4, datetime.utcnow().isoformat()))
+    conn.commit()
+    conn.close()
 
-@app.route("/admin_mod")
-def admin_mod():
-    if request.args.get("pin") != ADMIN_PIN:
-        return "Denied", 403
+    return page("Submitted", "<h3>Sent for admin review.</h3><a class='btn' href='/'>Main Menu</a>")
 
-    q_id = int(request.args.get("id"))
-    status = int(request.args.get("status"))
+@app.route("/admin", methods=["GET", "POST"])
+def admin():
+    if request.method == "POST":
+        p = request.form.get("pass", "")
+        if p == ADMIN_PASS:
+            session["is_admin"] = True
+            return redirect(url_for("admin_panel"))
+        return page("Admin", "<h3>Wrong password.</h3><a class='btn' href='/admin'>Try again</a>")
 
-    if not 0 <= q_id < len(question_database):
-        return "Invalid question ID", 400
+    if admin_required():
+        return redirect(url_for("admin_panel"))
 
-    if status not in [0, 2]:
-        return "Invalid status", 400
+    body = """
+    <h2>Admin Login</h2>
+    <form method='post'>
+        <input name='pass' type='password' placeholder='Enter admin password'>
+        <button class='btn' type='submit'>Login</button>
+    </form>
+    <a class='btn btn-sec' href='/'>Back</a>
+    """
+    return page("Admin Login", body)
 
-    question_database[q_id]["status"] = status
+@app.route("/admin/panel")
+def admin_panel():
+    if not admin_required():
+        return redirect(url_for("admin"))
 
-    return "OK"
+    body = """
+    <h2>Admin Panel</h2>
+    <a class='btn' href='/admin/responses'>Delete Answers</a>
+    <a class='btn' href='/admin/suggestions'>Moderate Submitted Questions</a>
+    <a class='btn btn-del' href='/admin/reset-votes' onclick="return confirm('Reset all votes and text answers?')">Reset Answers/Votes</a>
+    <a class='btn btn-sec' href='/admin/logout'>Logout</a>
+    <a class='btn btn-sec' href='/'>Main Menu</a>
+    """
+    return page("Admin Panel", body)
 
+@app.route("/admin/responses")
+def admin_responses():
+    if not admin_required():
+        return redirect(url_for("admin"))
 
-@app.route("/admin_clear_stats")
-def admin_clear_stats():
-    if request.args.get("pin") != ADMIN_PIN:
-        return "Denied", 403
+    conn = db_conn()
+    rows = conn.execute("""
+        SELECT tr.id, tr.author, tr.message, tr.created_at, q.text
+        FROM text_responses tr
+        JOIN questions q ON q.id = tr.question_id
+        ORDER BY tr.id DESC
+        LIMIT 300
+    """).fetchall()
+    conn.close()
 
-    for question in question_database:
-        question["votes"] = [0, 0, 0]
+    body = "<h2>Delete Bad Answers</h2>"
+    if not rows:
+        body += "<p>No responses yet.</p>"
+    else:
+        for r in rows:
+            body += f"""
+            <div class='resp left'>
+                <small><b>Prompt:</b> {r['text']}</small><br>
+                <b>{r['author']}:</b> {r['message']}<br>
+                <a class='btn btn-del' href='/admin/delete-response/{r["id"]}' onclick="return confirm('Delete this answer?')">Delete Immediately</a>
+            </div>
+            """
+    body += "<a class='btn btn-sec' href='/admin/panel'>Back</a>"
+    return page("Delete Responses", body)
 
-    return "OK"
+@app.route("/admin/delete-response/<int:rid>")
+def admin_delete_response(rid):
+    if not admin_required():
+        return redirect(url_for("admin"))
+    conn = db_conn()
+    conn.execute("DELETE FROM text_responses WHERE id=?", (rid,))
+    conn.commit()
+    conn.close()
+    return redirect(url_for("admin_responses"))
 
+@app.route("/admin/suggestions")
+def admin_suggestions():
+    if not admin_required():
+        return redirect(url_for("admin"))
 
-def handle_serial_input():
-    try:
-        ser = serial.Serial("/dev/ttyUSB0", 115200, timeout=1)
+    conn = db_conn()
+    rows = conn.execute("SELECT * FROM suggestions ORDER BY id ASC").fetchall()
+    conn.close()
 
-        while True:
-            line = ser.readline().decode("utf-8").strip()
+    body = "<h2>Pending Question Submissions</h2>"
+    if not rows:
+        body += "<p>No pending submissions.</p>"
+    else:
+        for r in rows:
+            ops = ""
+            if r["is_open_text"] == 0:
+                ops = f"<div class='small'>1) {r['op1']}<br>2) {r['op2']}<br>3) {r['op3']}<br>4) {r['op4']}</div>"
+            else:
+                ops = "<div class='small'>[Open Text Prompt]</div>"
 
-            if line.startswith("SUBMIT:"):
-                parts = line.split(":")
+            body += f"""
+            <div class='resp left'>
+                <b>{r['text']}</b>
+                {ops}
+                <div class='row'>
+                  <a class='btn btn-ok' href='/admin/approve/{r["id"]}'>Approve</a>
+                  <a class='btn btn-del' href='/admin/reject/{r["id"]}'>Reject</a>
+                </div>
+            </div>
+            """
+    body += "<a class='btn btn-sec' href='/admin/panel'>Back</a>"
+    return page("Moderate Suggestions", body)
 
-                if len(parts) == 3:
-                    q_id = int(parts[1])
-                    choice = int(parts[2])
+@app.route("/admin/approve/<int:sid>")
+def admin_approve(sid):
+    if not admin_required():
+        return redirect(url_for("admin"))
 
-                    if 0 <= q_id < len(question_database) and 0 <= choice < 3:
-                        question_database[q_id]["votes"][choice] += 1
+    conn = db_conn()
+    s = conn.execute("SELECT * FROM suggestions WHERE id=?", (sid,)).fetchone()
+    if s:
+        conn.execute("""
+            INSERT INTO questions (text, is_open_text, op1, op2, op3, op4, approved, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, 1, ?)
+        """, (s["text"], s["is_open_text"], s["op1"], s["op2"], s["op3"], s["op4"], datetime.utcnow().isoformat()))
+        conn.execute("DELETE FROM suggestions WHERE id=?", (sid,))
+        conn.commit()
+    conn.close()
+    return redirect(url_for("admin_suggestions"))
 
-    except Exception as error:
-        print(f"Serial input is unavailable: {error}")
+@app.route("/admin/reject/<int:sid>")
+def admin_reject(sid):
+    if not admin_required():
+        return redirect(url_for("admin"))
+    conn = db_conn()
+    conn.execute("DELETE FROM suggestions WHERE id=?", (sid,))
+    conn.commit()
+    conn.close()
+    return redirect(url_for("admin_suggestions"))
 
+@app.route("/admin/reset-votes")
+def admin_reset_votes():
+    if not admin_required():
+        return redirect(url_for("admin"))
+    conn = db_conn()
+    conn.execute("DELETE FROM votes")
+    conn.execute("DELETE FROM text_responses")
+    conn.commit()
+    conn.close()
+    return redirect(url_for("admin_panel"))
+
+@app.route("/admin/logout")
+def admin_logout():
+    session.pop("is_admin", None)
+    return redirect(url_for("menu"))
 
 if __name__ == "__main__":
-    threading.Thread(target=handle_serial_input, daemon=True).start()
-    app.run(host="0.0.0.0", port=5000)
+    init_db()
+    # Use host=0.0.0.0 so other devices on LAN can access Pi
+    app.run(host="0.0.0.0", port=5000, debug=False)
