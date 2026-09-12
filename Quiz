@@ -95,8 +95,7 @@ def menu():
     """
     return page("Main Menu", body)
 
-# --- Keep your existing quiz/admin routes here exactly as you already had them ---
-# (No logic changes required for your current behavior.)
+# Keep your existing quiz/admin routes below this line.
 
 if __name__ == "__main__":
     init_db()
