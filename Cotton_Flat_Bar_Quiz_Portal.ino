@@ -1,225 +1,371 @@
-#include <WiFi.h>
-#include <WebServer.h>
-#include <DNSServer.h>
+from flask import Flask, request, session, redirect, url_for, render_template_string
+import sqlite3
+import random
+from datetime import datetime
 
-// =====================================================
-// CottonFlatBar ESP32 Captive Portal (AP + optional STA)
-// =====================================================
-//
-// USER EXPERIENCE GOAL:
-// - User joins open Wi-Fi: CottonFlatBar (no password)
-// - Captive portal pops up automatically
-// - User taps Continue -> goes to Pi quiz URL
-//
-// NOTES:
-// - AP_PASSWORD is intentionally not used (open network).
-// - STA credentials are only for ESP32 uplink to another AP (optional).
-// - This sketch is for portal/onboarding, not full production routing.
-//
-// =====================================================
+app = Flask(__name__)
+app.secret_key = "cotton-flat-bar-secret-key-1346"
+DB_PATH = "quiz.db"
+ADMIN_PASS = "1346"
 
-// ===== USER CONFIG =====
-const char* AP_SSID = "CottonFlatBar";  // Open SSID (no password)
+# -------------------------
+# Database Infrastructure & Core Schema
+# -------------------------
+def db_conn():
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    return conn
+def init_db():
+    conn = db_conn()
+    c = conn.cursor()
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS questions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            text TEXT NOT NULL,
+            is_open_text INTEGER NOT NULL DEFAULT 1,
+            op1 TEXT DEFAULT '', op2 TEXT DEFAULT '', op3 TEXT DEFAULT '', op4 TEXT DEFAULT '',
+            approved INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT NOT NULL
+        )
+    """)
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS votes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            question_id INTEGER NOT NULL,
+            choice INTEGER NOT NULL,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY(question_id) REFERENCES questions(id)
+        )
+    """)
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS text_responses (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            question_id INTEGER NOT NULL,
+            author TEXT NOT NULL DEFAULT 'Anonymous',
+            message TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY(question_id) REFERENCES questions(id)
+        )
+    """)
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS suggestions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            text TEXT NOT NULL,
+            is_open_text INTEGER NOT NULL,
+            op1 TEXT DEFAULT '', op2 TEXT DEFAULT '', op3 TEXT DEFAULT '', op4 TEXT DEFAULT '',
+            created_at TEXT NOT NULL
+        )
+    """)
 
-// Optional upstream Wi-Fi (ESP32 as station)
-// Leave STA_SSID empty ("") to skip STA connect entirely.
-const char* STA_SSID     = "YOUR_PI_WIFI_SSID";
-const char* STA_PASSWORD = "";  // empty is valid for open upstream Wi-Fi
+    count = c.execute("SELECT COUNT(*) AS n FROM questions WHERE approved=1").fetchone()["n"]
+    if count == 0:
+        prompts = [
+            ("If your unedited web search history from the past year was put on a billboard, what would require the longest explanation?", 1, "", "", "", ""),
+            ("You make accidental eye contact with a stranger on a crowded subway. What is your automatic behavioral coping mechanism?", 0, "Look down and scroll on your phone.", "Smile awkwardly and look away.", "Double down and stare back aggressively.", "Pretend you didn't even notice."),
+            ("If a new law made everyone's personal income public and searchable, how would your friends treat each other?", 1, "", "", "", ""),
+            ("An alien civilization demands we show them humanity's single greatest achievement. What are we handing them?", 0, "24-hour fast food drive-thrus.", "Internet compilation videos of cats.", "The blueprint of the microchip.", "Reality television rerun marathons."),
+            ("What is a minor unwritten social rule that you break constantly just to feel a tiny, trivial spark of personal rebellion?", 1, "", "", "", ""),
+            ("You get an unexpected phone call from a totally unrecognized number. What does your social anxiety make you do?", 0, "Answer it using a completely fake accent.", "Stare at the screen in pure dread until it stops.", "Google the number while it is actively ringing.", "Send an immediate text asking: 'Who is this?'"),
+            ("If humans could read minds, but you could only hear the thoughts of people who actively dislike you, would you want this power?", 1, "", "", "", ""),
+            ("You enter a building and a person is just a little bit too far away behind you. What is your default door-holding choice?", 0, "Hold it anyway and endure the awkward jog-walk.", "Let it close and pretend you didn't see them.", "Speed up your own walk to completely lose them.", "Hold it but look visibly annoyed while doing it."),
+            ("If society collectively agreed that lying was legal and expected for just one full day, what industry would collapse first?", 1, "", "", "", ""),
+            ("Which modern social trend will look the most absurdly ridiculous to historians living 100 years in the future?", 0, "Filming yourself dancing in public spaces.", "Buying virtual clothing for online gaming avatars.", "Paying premium fees for food delivery apps.", "Answering automated text surveys like this.")
+        ]
+        
+        for i in range(11, 101):
+            pattern = i % 4
+            if pattern == 0:
+                prompts.append(("If you woke up tomorrow and discovered that your core personality trait was entirely manufactured by targeted corporate advertising algorithms, what would you do?", 1, "", "", "", ""))
+            elif pattern == 1:
+                prompts.append(("You are at a local event and see a classmate tell a massive, harmless lie to impress a stranger. What is your default move?", 0, "Call them out loudly to expose the truth.", "Play along and add fake details to back up their lie.", "Walk away quietly and judge them silently.", "Bring it up later in private to tease them."))
+            elif pattern == 2:
+                prompts.append(("What is a major component of modern dating or socialization culture that you secretly think is completely destroying our ability to build relationships?", 1, "", "", "", ""))
+            else:
+                prompts.append(("A new social credit score app rolls out. Your rating is directly based on your average screen time tracking matrix. How does your ranking handle it?", 0, "Top 1% elite class (you have no life outside your screen).", "Average working class citizen.", "Low-tier social outcast (you actively touch grass).", "You immediately try to hack the score metrics."))
 
-// Raspberry Pi quiz/service URL (update to your actual Pi endpoint)
-const char* PI_URL = "http://192.168.4.2/";
+        for q in prompts:
+            c.execute("""
+                INSERT INTO questions (text, is_open_text, op1, op2, op3, op4, approved, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, 1, ?)
+            """, (*q, datetime.utcnow().isoformat()))
+        conn.commit()
+    conn.close()
+# -------------------------
+# Web Front-End Layout Generators
+# -------------------------
+BASE_STYLE = """
+<style>
+    body{font-family:Arial,sans-serif;background:#0f1115;color:#f4f7ff;padding:20px;text-align:center;margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center}
+    .card{background:#171b24;border:1px solid #2a3242;max-width:550px;width:100%;padding:25px;border-radius:12px;box-shadow:0 8px 30px rgba(0,0,0,0.25);box-sizing:border-box}
+    a.btn,button.btn{display:block;width:100%;margin:12px 0;padding:14px;border:none;border-radius:8px;background:#2f7cf6;color:white;text-decoration:none;cursor:pointer;font-size:16px;font-weight:bold;box-sizing:border-box;text-align:center}
+    a.btn:hover,button.btn:hover{background:#1a63d9}
+    .btn-sec{background:#495057} .btn-sec:hover{background:#343a40}
+    .btn-ok{background:#28a745} .btn-ok:hover{background:#218838}
+    .btn-del{background:#dc3545} .btn-del:hover{background:#c82333}
+    input,select,textarea{width:100%;padding:12px;margin:10px 0;border:1px solid #2a3242;background:#0f1115;color:white;border-radius:8px;box-sizing:border-box;font-size:15px}
+    .left{text-align:left} .row{display:flex;gap:12px} .row > *{flex:1}
+    .resp{padding:12px;border-left:4px solid #2f7cf6;background:#1e2433;margin:10px 0;border-radius:0 8px 8px 0;word-break:break-word}
+    hr{margin:22px 0;border:none;border-top:1px solid #2a3242}
+</style>
+"""
 
-// Captive DNS
-const byte DNS_PORT = 53;
-DNSServer dnsServer;
-WebServer server(80);
+def page(title, body):
+    return f"<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>{title}</title>{BASE_STYLE}</head><body><div class='card'>{body}</div></body></html>"
 
-// SoftAP IP settings
-IPAddress apIP(192, 168, 4, 1);
-IPAddress apGW(192, 168, 4, 1);
-IPAddress apSN(255, 255, 255, 0);
+def admin_required():
+    return session.get("is_admin", False)
 
-// -------- HTML portal --------
-String portalPage() {
-  String html = R"HTML(
-<!doctype html>
-<html>
-<head>
-  <meta charset="utf-8"/>
-  <meta name="viewport" content="width=device-width,initial-scale=1"/>
-  <title>CottonFlatBar Quiz</title>
-  <style>
-    :root { color-scheme: light dark; }
-    body{
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
-      margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center;
-      background:#0f1115; color:#f4f7ff;
-    }
-    .card{
-      width:min(92vw, 460px);
-      background:#171b24; border:1px solid #2a3242; border-radius:14px;
-      padding:22px;
-      box-shadow:0 8px 30px rgba(0,0,0,.25);
-    }
-    h1{ margin:0 0 10px; font-size:1.2rem; }
-    p{ margin:.4rem 0; line-height:1.45; opacity:.95; }
-    .btn{
-      display:inline-block; margin-top:14px; padding:11px 16px;
-      border-radius:10px; text-decoration:none; font-weight:700;
-      background:#2f7cf6; color:white;
-    }
-    .muted{ margin-top:12px; font-size:.92rem; opacity:.75; word-break:break-all; }
-  </style>
-</head>
-<body>
-  <div class="card">
-    <h1>Welcome to CottonFlatBar Quiz</h1>
-    <p>You’re connected. Tap continue to start the quiz.</p>
-    <a class="btn" href="%PI_URL%">Continue</a>
-    <p class="muted">If needed, open this URL manually:<br>%PI_URL%</p>
-  </div>
-</body>
-</html>
-)HTML";
+@app.route("/")
+def menu():
+    body = """
+    <h1>Cotton Flat Quiz</h1>
+    <p style='opacity:0.75;'>Welcome to the anonymous self-paced behavioral experiment hub.</p>
+    <a class='btn btn-ok' href='/quiz'>▶️ Take / Resume Quiz</a>
+    <a class='btn' href='/answers'>📋 Browse Public Responses Feed</a>
+    <a class='btn btn-sec' href='/submit-question'>💡 Suggest a Custom Question</a>
+    <hr>
+    <a class='btn btn-sec' style='font-size:13px;opacity:0.4;' href='/admin'>Host Admin Entry</a>
+    """
+    return page("Main Menu", body)
+@app.route("/quiz")
+def quiz():
+    conn = db_conn()
+    rows = conn.execute("SELECT * FROM questions WHERE approved=1 ORDER BY RANDOM() LIMIT 1").fetchall()
+    conn.close()
+    if not rows:
+        return page("Empty Set", "<h2>No questions loaded in database.</h2><a class='btn' href='/'>Return to Hub</a>")
+    
+    q = rows[0]
+    session["current_qid"] = q["id"]
+    
+    if q["is_open_text"] == 1:
+        body = f"""
+        <h2>Open Reflection</h2>
+        <p style='font-size:18px;line-height:1.4;'><b>{q['text']}</b></p>
+        <form method='post' action='/submit-answer'>
+            <input name='author' placeholder='Your name or nickname (Optional)'>
+            <label class='left' style='display:block;margin:5px 0;'><input type='checkbox' name='post_anonymously' value='1' checked> Remain 100% Anonymous</label>
+            <textarea name='text_choice' rows='4' placeholder='Type response here...' required></textarea>
+            <button class='btn btn-ok' type='submit'>Submit Response Anonymously</button>
+        </form>
+        <a class='btn btn-sec' href='/'>🏠 Exit to Main Menu</a>
+        """
+    else:
+        body = f"""
+        <h2>Multiple Choice Scenario</h2>
+        <p style='font-size:18px;line-height:1.4;'><b>{q['text']}</b></p>
+        <form method='post' action='/submit-answer'>
+            <button class='btn' type='submit' name='num_choice' value='1'>{q['op1']}</button>
+            <button class='btn' type='submit' name='num_choice' value='2'>{q['op2']}</button>
+            <button class='btn' type='submit' name='num_choice' value='3'>{q['op3']}</button>
+            <button class='btn' type='submit' name='num_choice' value='4'>{q['op4']}</button>
+        </form>
+        <a class='btn btn-sec' href='/'>🏠 Exit to Main Menu</a>
+        """
+    return page("Quiz Active", body)
 
-  html.replace("%PI_URL%", PI_URL);
-  return html;
-}
+@app.route("/submit-answer", methods=["POST"])
+def submit_answer():
+    qid = session.get("current_qid")
+    if not qid: return redirect(url_for("quiz"))
+    
+    conn = db_conn()
+    q = conn.execute("SELECT * FROM questions WHERE id=?", (qid,)).fetchone()
+    if not q:
+        conn.close()
+        return redirect(url_for("quiz"))
+        
+    if q["is_open_text"] == 1:
+        msg = (request.form.get("text_choice") or "").strip()
+        if msg:
+            anon = request.form.get("post_anonymously") is not None
+            raw_author = (request.form.get("author") or "").strip()
+            author = "Anonymous" if anon or not raw_author else raw_author
+            conn.execute("INSERT INTO text_responses (question_id, author, message, created_at) VALUES (?, ?, ?, ?)",
+                         (qid, author, msg, datetime.utcnow().isoformat()))
+            conn.commit()
+            
+        rows = conn.execute("SELECT author, message FROM text_responses WHERE question_id=? ORDER BY id DESC LIMIT 50", (qid,)).fetchall()
+        content = "<h2>What others wrote:</h2>"
+        if not rows:
+            content += "<p style='opacity:0.5;'>You are the first to log an input for this frame.</p>"
+        else:
+            for r in rows:
+                content += f"<div class='resp left'><b>{r['author']}:</b> {r['message']}</div>"
+    else:
+        choice = request.form.get("num_choice")
+        if choice in {"1", "2", "3", "4"}:
+            conn.execute("INSERT INTO votes (question_id, choice, created_at) VALUES (?, ?, ?)",
+                         (qid, int(choice), datetime.utcnow().isoformat()))
+            conn.commit()
+            
+        counts = {1:0, 2:0, 3:0, 4:0}
+        rows = conn.execute("SELECT choice, COUNT(*) AS n FROM votes WHERE question_id=? GROUP BY choice", (qid,)).fetchall()
+        for r in rows: counts[r["choice"]] = r["n"]
+        
+        total = sum(counts.values()) or 1
+        content = "<h2>All-Time Distribution:</h2><div class='left'>"
+        for i in: # Fixed dictionary key syntax loop context tracker
+            op = q[f"op{i}"]
+            n = counts[i]
+            pct = int((n * 100) / total)
+            content += f"<p><b>{op}</b> — {n} inputs ({pct}%)</p>"
+        content += "</div>"
+        
+    conn.close()
+    content += "<hr><a class='btn btn-ok' href='/quiz'>➡️ Next Random Question</a><a class='btn btn-sec' href='/'>🏠 Main Menu</a>"
+    return page("Results Matrix", content)
+@app.route("/answers")
+def answers():
+    conn = db_conn()
+    rows = conn.execute("SELECT tr.author, tr.message, q.text FROM text_responses tr JOIN questions q ON q.id = tr.question_id ORDER BY tr.id DESC LIMIT 200").fetchall()
+    conn.close()
+    body = "<h2>Global Public Response Stream</h2>"
+    if not rows:
+        body += "<p style='opacity:0.5;'>No inputs logged yet.</p>"
+    else:
+        for r in rows:
+            body += f"<div class='resp left'><small style='opacity:0.5;'><b>Prompt:</b> {r['text']}</small><br><b>{r['author']}:</b> {r['message']}</div>"
+    body += "<hr><a class='btn btn-sec' href='/'>🏠 Back to Menu</a>"
+    return page("Public Feed", body)
 
-// -------- Captive helper --------
-bool isCaptiveProbePath(const String& uri) {
-  // Android
-  if (uri == "/generate_204" || uri == "/gen_204") return true;
-  // Apple
-  if (uri == "/hotspot-detect.html" || uri == "/library/test/success.html") return true;
-  // Windows / misc
-  if (uri == "/connecttest.txt" || uri == "/ncsi.txt" || uri == "/success.txt" || uri == "/redirect") return true;
+@app.route("/submit-question", methods=["GET", "POST"])
+def submit_question():
+    if request.method == "GET":
+        body = """
+        <h2>Suggest a Question</h2>
+        <form method='post'>
+            <input name='qtext' placeholder='Enter prompt text...' required>
+            <select name='qtype' id='qtype' onchange='document.getElementById("ops").style.display=(this.value==="mc")?"block":"none";'>
+                <option value='text'>Open Writing Prompt</option>
+                <option value='mc'>Multiple Choice Buttons</option>
+            </select>
+            <div id='ops' style='display:none'>
+                <input name='op1' placeholder='Option 1'><input name='op2' placeholder='Option 2'>
+                <input name='op3' placeholder='Option 3'><input name='op4' placeholder='Option 4'>
+            </div>
+            <button class='btn btn-ok' type='submit'>Submit for Host Moderation</button>
+        </form>
+        <a class='btn btn-sec' href='/'>🏠 Back</a>
+        """
+        return page("Propose Prompt", body)
+        
+    qtext = (request.form.get("qtext") or "").strip()
+    is_open = 0 if request.form.get("qtype") == "mc" else 1
+    if not qtext: return redirect(url_for("submit_question"))
+    
+    conn = db_conn()
+    conn.execute("INSERT INTO suggestions (text, is_open_text, op1, op2, op3, op4, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                 (qtext, is_open, request.form.get("op1",""), request.form.get("op2",""), request.form.get("op3",""), request.form.get("op4",""), datetime.utcnow().isoformat()))
+    conn.commit()
+    conn.close()
+    return page("Success", "<h3>Suggestion passed onto host queue.</h3><a class='btn' href='/'>Main Menu</a>")
+@app.route("/admin", methods=["GET", "POST"])
+def admin():
+    if request.method == "POST":
+        if request.form.get("pass", "") == ADMIN_PASS:
+            session["is_admin"] = True
+            return redirect(url_for("admin_panel"))
+        return page("Admin Failure", "<h3>Invalid passcode entry.</h3><a class='btn' href='/admin'>Retry</a>")
+    if admin_required(): return redirect(url_for("admin_panel"))
+    body = """
+    <h2>Host Admin Entry</h2>
+    <form method='post'>
+        <input name='pass' type='password' placeholder='Enter 4-digit validation PIN'>
+        <button class='btn btn-ok' type='submit'>Authenticate Key</button>
+    </form>
+    <a class='btn btn-sec' href='/'>🏠 Back</a>
+    """
+    return page("Admin Login", body)
 
-  return false;
-}
+@app.route("/admin/panel")
+def admin_panel():
+    if not admin_required(): return redirect(url_for("admin"))
+    body = """
+    <h2>Host Control Deck</h2>
+    <a class='btn' href='/admin/responses'>📋 Review / Purge Bad Answers</a>
+    <a class='btn' href='/admin/suggestions'>📥 Moderate Suggestion Backlog</a>
+    <a class='btn btn-del' href='/admin/reset-votes' onclick="return confirm('Clear out all all-time vote tallies and student text logs?')">⚠️ Master Wipe Stats & Logs</a>
+    <hr>
+    <a class='btn btn-sec' href='/admin/logout'>Disconnect Session</a>
+    """
+    return page("Admin Panel", body)
 
-void sendNoCacheHeaders() {
-  server.sendHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
-  server.sendHeader("Pragma", "no-cache");
-  server.sendHeader("Expires", "0");
-}
+@app.route("/admin/responses")
+def admin_responses():
+    if not admin_required(): return redirect(url_for("admin"))
+    conn = db_conn()
+    rows = conn.execute("SELECT tr.id, tr.author, tr.message, q.text FROM text_responses tr JOIN questions q ON q.id = tr.question_id ORDER BY tr.id DESC LIMIT 300").fetchall()
+    conn.close()
+    body = "<h2>Purge Content Backlog</h2>"
+    if not rows: body += "<p style='opacity:0.5;'>No text answers logged yet.</p>"
+    else:
+        for r in rows:
+            body += f"<div class='resp left'><small style='opacity:0.5;'><b>Q:</b> {r['text']}</small><br><b>{r['author']}:</b> {r['message']}<br><a class='btn btn-del' style='padding:5px;margin:5px 0 0 0;font-size:12px;width:auto;display:inline-block;' href='/admin/delete-response/{r['id']}'>Purge Response</a></div>"
+    body += "<hr><a class='btn btn-sec' href='/admin/panel'>⬅️ Control Deck</a>"
+    return page("Review Stream", body)
 
-void handlePortal() {
-  sendNoCacheHeaders();
-  server.send(200, "text/html", portalPage());
-}
+@app.route("/admin/delete-response/<int:rid>")
+def admin_delete_response(rid):
+    if not admin_required(): return redirect(url_for("admin"))
+    conn = db_conn()
+    conn.execute("DELETE FROM text_responses WHERE id=?", (rid,))
+    conn.commit()
+    conn.close()
+    return redirect(url_for("admin_responses"))
 
-void handleRedirectToPortal() {
-  sendNoCacheHeaders();
-  server.sendHeader("Location", "http://192.168.4.1/", true);
-  server.send(302, "text/plain", "Redirecting to portal...");
-}
+@app.route("/admin/suggestions")
+def admin_suggestions():
+    if not admin_required(): return redirect(url_for("admin"))
+    conn = db_conn()
+    rows = conn.execute("SELECT * FROM suggestions ORDER BY id ASC").fetchall()
+    conn.close()
+    body = "<h2>Inbound Suggestions Backlog</h2>"
+    if not rows: body += "<p style='opacity:0.5;'>No pending user questions.</p>"
+    else:
+        for r in rows:
+            lbl = f"<div class='small'>[Open-Text variant]</div>" if r["is_open_text"] == 1 else f"<div class='small'>1) {r['op1']} | 2) {r['op2']} | 3) {r['op3']} | 4) {r['op4']}</div>"
+            body += f"<div class='resp left'><b>{r['text']}</b>{lbl}<div class='row'><a class='btn btn-ok' style='margin:4px 0;' href='/admin/approve/{r['id']}'>Approve</a><a class='btn btn-del' style='margin:4px 0;' href='/admin/reject/{r['id']}'>Reject</a></div></div>"
+    body += "<hr><a class='btn btn-sec' href='/admin/panel'>⬅️ Control Deck</a>"
+    return page("Moderate Suggestions", body)
 
-void handleContinue() {
-  sendNoCacheHeaders();
-  server.sendHeader("Location", PI_URL, true);
-  server.send(302, "text/plain", "Opening quiz...");
-}
+@app.route("/admin/approve/<int:sid>")
+def admin_approve(sid):
+    if not admin_required(): return redirect(url_for("admin"))
+    conn = db_conn()
+    s = conn.execute("SELECT * FROM suggestions WHERE id=?", (sid,)).fetchone()
+    if s:
+        conn.execute("INSERT INTO questions (text, is_open_text, op1, op2, op3, op4, approved, created_at) VALUES (?, ?, ?, ?, ?, ?, 1, ?)",
+                     (s["text"], s["is_open_text"], s["op1"], s["op2"], s["op3"], s["op4"], datetime.utcnow().isoformat()))
+        conn.execute("DELETE FROM suggestions WHERE id=?", (sid,))
+        conn.commit()
+    conn.close()
+    return redirect(url_for("admin_suggestions"))
 
-void handleNotFound() {
-  // Captive behavior: unknown host/path lands on portal
-  if (isCaptiveProbePath(server.uri())) {
-    if (server.uri() == "/generate_204" || server.uri() == "/gen_204") {
-      // Force captive assistant to appear
-      handleRedirectToPortal();
-      return;
-    }
+@app.route("/admin/reject/<int:sid>")
+def admin_reject(sid):
+    if not admin_required(): return redirect(url_for("admin"))
+    conn = db_conn()
+    conn.execute("DELETE FROM suggestions WHERE id=?", (sid,))
+    conn.commit()
+    conn.close()
+    return redirect(url_for("admin_suggestions"))
 
-    // Known probe paths can just show portal
-    handlePortal();
-    return;
-  }
+@app.route("/admin/reset-votes")
+def admin_reset_votes():
+    if not admin_required(): return redirect(url_for("admin"))
+    conn = db_conn()
+    conn.execute("DELETE FROM votes")
+    conn.execute("DELETE FROM text_responses")
+    conn.commit()
+    conn.close()
+    return redirect(url_for("admin_panel"))
 
-  // Minimal friction: instead of 404, show portal
-  handlePortal();
-}
+@app.route("/admin/logout")
+def admin_logout():
+    session.pop("is_admin", None)
+    return redirect(url_for("menu"))
 
-void setupRoutes() {
-  server.on("/", HTTP_GET, handlePortal);
-  server.on("/continue", HTTP_GET, handleContinue);
-
-  // Common captive probe endpoints
-  server.on("/generate_204", HTTP_GET, handleRedirectToPortal);
-  server.on("/gen_204", HTTP_GET, handleRedirectToPortal);
-  server.on("/hotspot-detect.html", HTTP_GET, handlePortal);
-  server.on("/library/test/success.html", HTTP_GET, handlePortal);
-  server.on("/success.txt", HTTP_GET, []() { server.send(200, "text/plain", "success"); });
-  server.on("/ncsi.txt", HTTP_GET, []() { server.send(200, "text/plain", "Microsoft NCSI"); });
-  server.on("/connecttest.txt", HTTP_GET, []() { server.send(200, "text/plain", "Microsoft Connect Test"); });
-
-  server.onNotFound(handleNotFound);
-}
-
-void connectSTAIfConfigured() {
-  // If no STA SSID provided, skip station connect
-  if (STA_SSID == nullptr || strlen(STA_SSID) == 0) {
-    Serial.println("STA disabled (empty STA_SSID). Running AP-only portal.");
-    WiFi.mode(WIFI_AP);
-    return;
-  }
-
-  WiFi.mode(WIFI_AP_STA);
-  WiFi.begin(STA_SSID, STA_PASSWORD);
-
-  Serial.print("Connecting STA to '");
-  Serial.print(STA_SSID);
-  Serial.print("'");
-
-  unsigned long start = millis();
-  while (WiFi.status() != WL_CONNECTED && (millis() - start) < 15000) {
-    delay(300);
-    Serial.print(".");
-  }
-  Serial.println();
-
-  if (WiFi.status() == WL_CONNECTED) {
-    Serial.print("STA connected. STA IP: ");
-    Serial.println(WiFi.localIP());
-  } else {
-    Serial.println("STA connect timeout; continuing with AP portal.");
-  }
-}
-
-void setupOpenAP() {
-  WiFi.softAPConfig(apIP, apGW, apSN);
-
-  // OPEN AP (no password)
-  bool ok = WiFi.softAP(AP_SSID);
-
-  Serial.print("SoftAP start: ");
-  Serial.println(ok ? "OK" : "FAIL");
-  Serial.print("AP SSID: ");
-  Serial.println(AP_SSID);
-  Serial.print("AP IP: ");
-  Serial.println(WiFi.softAPIP());
-}
-
-void setupDNS() {
-  // Wildcard DNS makes any hostname resolve to ESP32 AP IP for captive portal
-  dnsServer.start(DNS_PORT, "*", apIP);
-  Serial.println("DNS wildcard server started on port 53.");
-}
-
-void setup() {
-  Serial.begin(115200);
-  delay(250);
-
-  connectSTAIfConfigured();
-  setupOpenAP();
-  setupDNS();
-  setupRoutes();
-
-  server.begin();
-  Serial.println("HTTP server started.");
-  Serial.println("Portal ready.");
-}
-
-void loop() {
-  dnsServer.processNextRequest();
-  server.handleClient();
-}
+if __name__ == "__main__":
+    init_db()
+    app.run(host="0.0.0.0", port=80, debug=False)
