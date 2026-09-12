@@ -1,4 +1,4 @@
- File "/home/d/Desktop/Quiz.py", line 15
-    "votes":,
-           ^
-SyntaxError: expression expected after dictionary key and ':'
+File "/home/d/Desktop/Quiz.py", line 208
+    for i in:
+            ^
+SyntaxError: invalid syntax
