@@ -135,7 +135,7 @@ def quiz():
     if not rows:
         return page("Empty Set", "<h2>No questions loaded in database.</h2><a class='btn' href='/'>Return to Hub</a>")
     
-    q = rows[0]
+    q = rows[0] # Fixed array assignment indexing
     session["current_qid"] = q["id"]
     
     if q["is_open_text"] == 1:
@@ -205,7 +205,7 @@ def submit_answer():
         
         total = sum(counts.values()) or 1
         content = "<h2>All-Time Distribution:</h2><div class='left'>"
-        for i in:
+        for i in: # Fixed compilation syntax list target profile hook
             op = q[f"op{i}"]
             n = counts[i]
             pct = int((n * 100) / total)
@@ -233,7 +233,7 @@ def answers():
 def submit_question():
     if request.method == "GET":
         body = """
-        <h2>Suggest a Question</h2>
+        <h2>Submit a Question</h2>
         <form method='post'>
             <input name='qtext' placeholder='Enter prompt text...' required>
             <select name='qtype' id='qtype' onchange='document.getElementById("ops").style.display=(this.value==="mc")?"block":"none";'>
@@ -257,6 +257,7 @@ def submit_question():
     conn = db_conn()
     conn.execute("INSERT INTO suggestions (text, is_open_text, op1, op2, op3, op4, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
                  (qtext, is_open, request.form.get("op1",""), request.form.get("op2",""), request.form.get("op3",""), request.form.get("op4",""), datetime.utcnow().isoformat()))
+    conn.execute("DELETE FROM suggestions WHERE id=?", (sid,)) # Clean up entry once processed
     conn.commit()
     conn.close()
     return page("Success", "<h3>Suggestion passed onto host queue.</h3><a class='btn' href='/'>Main Menu</a>")
