@@ -8,6 +8,7 @@ const byte DNS_PORT = 53;
 
 DNSServer dnsServer;
 WebServer server(80);
+
 IPAddress apIP(192, 168, 4, 1);
 IPAddress apGW(192, 168, 4, 1);
 IPAddress apSN(255, 255, 255, 0);
@@ -25,10 +26,10 @@ void setup() {
 
   WiFi.mode(WIFI_AP);
   WiFi.softAPConfig(apIP, apGW, apSN);
-  WiFi.softAP(AP_SSID);
+  WiFi.softAP(AP_SSID); // open AP
   dnsServer.start(DNS_PORT, "*", apIP);
 
-  // No portal UI page at all: always jump straight to Pi app
+  // No landing page. Always redirect to Pi app.
   server.on("/", HTTP_GET, redirectToPi);
   server.onNotFound(redirectToPi);
 
