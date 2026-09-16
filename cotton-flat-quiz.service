@@ -1,0 +1,16 @@
+[Unit]
+Description=Cotton Flat Bar Quiz Flask Application
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/pi/CottonFlatBarQuiz
+Environment="PATH=/home/pi/.local/bin:/usr/local/bin:/usr/bin:/bin"
+ExecStart=/usr/bin/python3 /home/pi/CottonFlatBarQuiz/Quiz.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
