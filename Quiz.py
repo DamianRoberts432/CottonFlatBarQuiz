@@ -11,6 +11,8 @@ app.secret_key = os.environ.get("COTTON_FLAT_SECRET", "cotton-flat-bar-secret-ke
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(BASE_DIR, "quiz.db")
 ADMIN_PASS = os.environ.get("COTTON_FLAT_ADMIN_PASS", "1346")
+FLASK_HOST = os.environ.get("FLASK_HOST", "0.0.0.0")
+FLASK_PORT = int(os.environ.get("FLASK_PORT", "5000"))
 
 
 def db_conn():
@@ -68,13 +70,7 @@ def init_db():
 
 BASE_STYLE = """
 <style>
-*{box-sizing:border-box} body{font-family:Arial,sans-serif;background:#0f1115;color:#f4f7ff;padding:20px;text-align:center;margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center}
-.card{background:#171b24;border:1px solid #2a3242;max-width:620px;width:100%;padding:25px;border-radius:12px;box-shadow:0 8px 30px rgba(0,0,0,.25);box-sizing:border-box}
-a.btn,button.btn{display:block;width:100%;margin:12px 0;padding:14px;border:0;border-radius:8px;background:#2f7cf6;color:white;text-decoration:none;cursor:pointer;font-size:16px;font-weight:bold}
-a.btn:hover,button.btn:hover{filter:brightness(.9)} .btn-sec{background:#495057!important}.btn-ok{background:#28a745!important}.btn-warn{background:#f0a500!important}.btn-del{background:#dc3545!important}
-input,select,textarea{width:100%;padding:12px;margin:8px 0;border:1px solid #2a3242;background:#0f1115;color:white;border-radius:8px;box-sizing:border-box;font-size:15px}
-textarea{min-height:100px;resize:vertical}.left{text-align:left}.notice{padding:12px;border-radius:8px;background:#1e3a2b;border:1px solid #2f6c4a;margin:12px 0}.error{padding:12px;border-radius:8px;background:#442126;border:1px solid #8c3943;margin:12px 0}
-.question,.resp{padding:14px;border-left:4px solid #2f7cf6;background:#1e2433;margin:12px 0;border-radius:0 8px 8px 0;word-break:break-word}.muted{color:#aeb8c8;font-size:13px}.row{display:flex;gap:12px}.row>*{flex:1}hr{margin:22px 0;border:0;border-top:1px solid #2a3242}.choice{display:block;text-align:left;padding:13px;margin:10px 0;background:#202838;border-radius:8px;cursor:pointer}.choice input{width:auto;margin-right:10px}.small{font-size:13px}h1,h2,h3{margin-top:0}
+*{box-sizing:border-box} body{font-family:Arial,sans-serif;background:#0f1115;color:#f4f7ff;padding:20px;text-align:center;margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center} .card{background:#171b24;border:1px solid #2a3242;max-width:620px;width:100%;padding:25px;border-radius:12px;box-shadow:0 8px 30px rgba(0,0,0,.25);box-sizing:border-box} a.btn,button.btn{display:block;width:100%;margin:12px 0;padding:14px;border:0;border-radius:8px;background:#2f7cf6;color:white;text-decoration:none;cursor:pointer;font-size:16px;font-weight:bold} a.btn:hover,button.btn:hover{filter:brightness(.9)} .btn-sec{background:#495057!important}.btn-ok{background:#28a745!important}.btn-warn{background:#f0a500!important}.btn-del{background:#dc3545!important}.left{text-align:left} input,select,textarea{width:100%;padding:12px;margin:8px 0;border:1px solid #2a3242;background:#0f1115;color:white;border-radius:8px;box-sizing:border-box;font-size:15px} textarea{min-height:100px;resize:vertical}.notice{padding:12px;border-radius:8px;background:#1e3a2b;border:1px solid #2f6c4a;margin:12px 0}.error{padding:12px;border-radius:8px;background:#3d1f1f;border:1px solid #b75656;margin:12px 0}.question,.resp{padding:14px;border-left:4px solid #2f7cf6;background:#1e2433;margin:12px 0;border-radius:0 8px 8px 0;word-break:break-word}.muted{color:#aeb8c8;font-size:13px}.row{display:flex;gap:12px}.small{font-size:14px;padding:10px 12px}.choice{display:block;padding:10px 0;text-align:left}
 </style>
 """
 
@@ -277,10 +273,10 @@ def admin():
         body += f"<div class='question left'><strong>{escape(suggestion['text'])}</strong><br><span class='muted'>{kind}</span>"
         if not suggestion["is_open_text"]:
             body += "<br>" + "<br>".join(escape(option) for option in options_for(suggestion))
-        body += f"<form method='post' action='/admin/approve/{suggestion['id']}'><button class='btn btn-ok' type='submit'>Approve</button></form><form method='post' action='/admin/reject/{suggestion['id']}'><button class='btn btn-del' type='submit'>Reject</button></form></div>"
+        body += f"<form method='post' action='/admin/approve/{suggestion['id']}'><button class='btn btn-ok' type='submit'>Approve</button></form><form method='post' action='/admin/reject/{suggestion['id']}'><button class='btn btn-del small' type='submit'>Reject</button></form></div>"
     body += "<hr><h2>Active Questions</h2>"
     for question in questions:
-        body += f"<div class='question left'><strong>{escape(question['text'])}</strong><form method='post' action='/admin/delete-question/{question['id']}'><button class='btn btn-del small' type='submit'>Delete Question</button></form></div>"
+        body += f"<div class='question left'><strong>{escape(question['text'])}</strong><form method='post' action='/admin/delete-question/{question['id']}'><button class='btn btn-del small' type='submit'>Delete</button></form></div>"
     body += "<a class='btn btn-sec' href='/admin/logout'>Log Out</a><a class='btn btn-sec' href='/'>Back to Menu</a>"
     conn.close()
     return page("Host Admin", body)
@@ -305,7 +301,7 @@ def add_question():
         error = "<div class='error'>Enter a question, and at least two choices for multiple choice.</div>"
     else:
         error = ""
-    return page("Add Question", f"""<h1>Add Question</h1>{error}<form method='post' class='left'><textarea name='text' required maxlength='500' placeholder='Question'></textarea><select name='question_type'><option value='open'>Open-text response</option><option value='choice'>Multiple choice</option></select><input name='op1' maxlength='200' placeholder='Choice 1'><input name='op2' maxlength='200' placeholder='Choice 2'><input name='op3' maxlength='200' placeholder='Choice 3 (optional)'><input name='op4' maxlength='200' placeholder='Choice 4 (optional)'><button class='btn btn-ok' type='submit'>Add Approved Question</button></form><a class='btn btn-sec' href='/admin'>Cancel</a>""")
+    return page("Add Question", f"""<h1>Add Question</h1>{error}<form method='post' class='left'><textarea name='text' required maxlength='500' placeholder='Question'></textarea><select name='question_type'><option value='open'>Open text</option><option value='choice'>Multiple choice</option></select><input name='op1' maxlength='200' placeholder='Choice 1'><input name='op2' maxlength='200' placeholder='Choice 2'><input name='op3' maxlength='200' placeholder='Choice 3'><input name='op4' maxlength='200' placeholder='Choice 4'><button class='btn btn-ok' type='submit'>Add Question</button></form><a class='btn btn-sec' href='/admin'>Back to Admin</a>""")
 
 
 @app.route("/admin/approve/<int:suggestion_id>", methods=["POST"])
@@ -357,4 +353,4 @@ def logout():
 
 if __name__ == "__main__":
     init_db()
-    app.run(host="0.0.0.0", port=5000, debug=False, threaded=True)
+    app.run(host=FLASK_HOST, port=FLASK_PORT, debug=False, threaded=True)

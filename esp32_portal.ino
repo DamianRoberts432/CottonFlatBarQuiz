@@ -4,10 +4,11 @@
 
 // Cotton Flat Bar Quiz ESP32 captive portal.
 // The ESP32 creates an OPEN Wi-Fi network. The Raspberry Pi must join it and
-// run Quiz.py on port 5000. Update PI_HOST if the Pi is assigned a new IP.
-
+// run Quiz.py on port 5000.
+// IMPORTANT: the Pi must be configured to a fixed IP on this AP network so the
+// ESP32 menu links remain stable. Use 192.168.4.4 unless you intentionally change it.
 const char* AP_SSID = "Cotton Flat Bar Quiz";
-const char* PI_HOST = "192.168.4.3";
+const char* PI_HOST = "192.168.4.4";
 const uint16_t PI_PORT = 5000;
 
 const byte DNS_PORT = 53;
@@ -24,7 +25,7 @@ String piUrl(const char* path) {
 
 const char MENU_STYLE[] PROGMEM = R"rawliteral(
 <style>
-*{box-sizing:border-box}body{margin:0;min-height:100vh;padding:20px;display:flex;align-items:center;justify-content:center;font-family:Arial,sans-serif;color:#f4f7ff;background:#0f1115}.card{width:100%;max-width:430px;padding:28px;text-align:center;background:#171b24;border:1px solid #2a3242;border-radius:14px;box-shadow:0 8px 30px rgba(0,0,0,.3)}h1{margin:0 0 8px;font-size:25px}.subtitle{margin:0 0 24px;color:#aeb8c8;font-size:14px}.button{display:block;width:100%;margin:12px 0;padding:16px;border-radius:10px;color:white;text-decoration:none;font-size:17px;font-weight:bold}.quiz{background:#2f7cf6}.answers{background:#28a745}.submit{background:#f0a500}.admin{margin-top:26px;padding:12px;background:#495057;font-size:14px}.footer{margin-top:20px;color:#7f8a9d;font-size:11px}
+*{box-sizing:border-box}body{margin:0;min-height:100vh;padding:20px;display:flex;align-items:center;justify-content:center;font-family:Arial,sans-serif;color:#f4f7ff;background:#0f1115}.card{width:100%;max-width:500px;background:#171b24;border:1px solid #2a3242;padding:30px;border-radius:12px;box-shadow:0 8px 30px rgba(0,0,0,.25)}h1{margin:0 0 12px}.subtitle{color:#aeb8c8;margin-bottom:18px}.button{display:block;width:100%;padding:14px 12px;margin:12px 0;border:none;border-radius:8px;text-align:center;font-size:16px;font-weight:bold;color:#fff;text-decoration:none}.quiz{background:#2f7cf6}.answers{background:#495057}.submit{background:#f0a500}.admin{background:#28a745}.footer{margin-top:16px;color:#aeb8c8;font-size:12px}
 </style>
 )rawliteral";
 
@@ -89,7 +90,7 @@ void setup() {
   Serial.println(WiFi.softAPIP());
   Serial.print("Raspberry Pi quiz: ");
   Serial.println(piUrl("/"));
-  Serial.println("Pi must be connected to this Wi-Fi and running Quiz.py.");
+  Serial.println("Pi must be connected to this Wi-Fi and have a fixed IP of 192.168.4.4.");
 }
 
 void loop() {
