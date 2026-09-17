@@ -1,4 +1,5 @@
 #include <WiFi.h>
+#include <WiFiMulti.h>
 #include <WebServer.h>
 #include <DNSServer.h>
 #include "lwip/lwip_napt.h"
@@ -7,24 +8,36 @@
 // Cotton Flat Bar Quiz ESP32 captive portal + Wi-Fi NAT router.
 //
 // The ESP32 does two jobs at once:
-//   1. STATION: joins your existing "Arris-E491" Wi-Fi for internet access.
+//   1. STATION: joins whichever upstream Wi-Fi is available (tries
+//      "Arris-E491" first, falls back to "ATTEI7xz4u") for internet access.
 //   2. ACCESS POINT: broadcasts the open "Cotton Flat Bar Quiz" network for
 //      the Raspberry Pi and patrons.
 //
-// Traffic from the AP side is NAT-forwarded out through the STA (Arris)
-// connection, so anything joined to "Cotton Flat Bar Quiz" -- including the
-// Raspberry Pi -- gets real internet access (for `git pull`, etc.) while
+// Traffic from the AP side is NAT-forwarded out through whichever upstream
+// Wi-Fi connected, so anything joined to "Cotton Flat Bar Quiz" -- including
+// the Raspberry Pi -- gets real internet access (for `git pull`, etc.) while
 // still being on the same local network as patrons for the quiz itself.
 //
-// The USB cable to the Pi is power/serial only and is NOT used for
-// networking; all traffic moves over Wi-Fi, which is faster and far more
-// reliable than trying to route packets over a serial line.
+// This lets you power on the ESP32 + Pi at either location (home, wherever
+// ATTEI7xz4u is in range, etc.) and have it "just work" using whichever
+// upstream network is reachable.
 //
-// IMPORTANT: Set ARRIS_PASSWORD below before flashing.
+// The USB cable to the Pi is power/serial only and is NOT used for
+// networking; all traffic moves over Wi-Fi.
+//
+// IMPORTANT: Fill in both passwords below before flashing.
 
 // ---------- EDIT BEFORE FLASHING ----------
-const char* ARRIS_SSID = "Arris-E491";
-const char* ARRIS_PASSWORD = "TYPE_PASSPHRASE_HERE"; // <-- put real Arris-E491 password here
+struct UpstreamNetwork {
+  const char* ssid;
+  const char* password;
+};
+
+UpstreamNetwork UPSTREAM_NETWORKS[] = {
+  { "Arris-E491",  "TYPE_ARRIS_PASSPHRASE_HERE" },
+  { "ATTEI7xz4u",  "TYPE_ATT_PASSPHRASE_HERE" },
+};
+const size_t UPSTREAM_NETWORK_COUNT = sizeof(UPSTREAM_NETWORKS) / sizeof(UPSTREAM_NETWORKS[0]);
 // -------------------------------------------
 
 const char* AP_SSID = "Cotton Flat Bar Quiz"; // open network, no password
@@ -40,6 +53,7 @@ const unsigned long STA_RETRY_INTERVAL_MS = 15000;
 unsigned long lastStaRetry = 0;
 bool naptStarted = false;
 
+WiFiMulti wifiMulti;
 DNSServer dnsServer;
 WebServer server(80);
 
@@ -92,9 +106,9 @@ void handleStatus() {
   json += "\"portal_ip\":\"" + WiFi.softAPIP().toString() + "\",";
   json += "\"pi_url\":\"" + piUrl("/") + "\",";
   json += "\"connected_clients\":" + String(WiFi.softAPgetStationNum()) + ",";
-  json += "\"arris_ssid\":\"" + String(ARRIS_SSID) + "\",";
-  json += "\"arris_status\":\"" + staState + "\",";
-  json += "\"arris_ip\":\"" + WiFi.localIP().toString() + "\",";
+  json += "\"upstream_ssid\":\"" + WiFi.SSID() + "\",";
+  json += "\"upstream_status\":\"" + staState + "\",";
+  json += "\"upstream_ip\":\"" + WiFi.localIP().toString() + "\",";
   json += "\"nat_active\":" + String(naptStarted ? "true" : "false");
   json += "}";
   server.send(200, "application/json", json);
@@ -106,22 +120,19 @@ void handleNotFound() {
   handleMenu();
 }
 
-void connectArris() {
-  Serial.print("Connecting to Arris Wi-Fi: ");
-  Serial.println(ARRIS_SSID);
-  WiFi.begin(ARRIS_SSID, ARRIS_PASSWORD);
-}
-
 void startNat() {
   if (naptStarted) return;
   // Enable IP forwarding + NAPT so devices on the "Cotton Flat Bar Quiz" AP
-  // (192.168.4.0/24) can reach the internet through the Arris connection.
+  // (192.168.4.0/24) can reach the internet through whichever upstream
+  // network connected.
   ip_napt_enable(AP_IP, 1);
-  // Point the AP-side DNS at whatever DNS the Arris network handed us so
+  // Point the AP-side DNS at whatever DNS the upstream network handed us so
   // clients (like the Pi) can resolve github.com, etc.
   dns_setserver(0, dns_getserver(0));
   naptStarted = true;
-  Serial.println("NAT routing enabled: Cotton Flat Bar Quiz -> Arris-E491 -> Internet.");
+  Serial.print("NAT routing enabled: Cotton Flat Bar Quiz -> ");
+  Serial.print(WiFi.SSID());
+  Serial.println(" -> Internet.");
 }
 
 void setup() {
@@ -139,7 +150,14 @@ void setup() {
     Serial.println("ERROR: Could not start Wi-Fi access point.");
   }
 
-  connectArris();
+  // Register every known upstream network. WiFiMulti automatically connects
+  // to whichever one has the strongest signal / is available.
+  for (size_t i = 0; i < UPSTREAM_NETWORK_COUNT; i++) {
+    wifiMulti.addAP(UPSTREAM_NETWORKS[i].ssid, UPSTREAM_NETWORKS[i].password);
+    Serial.print("Registered upstream network: ");
+    Serial.println(UPSTREAM_NETWORKS[i].ssid);
+  }
+  wifiMulti.run();
 
   dnsServer.start(DNS_PORT, "*", AP_IP);
   server.on("/", HTTP_GET, handleMenu);
@@ -161,7 +179,7 @@ void loop() {
   dnsServer.processNextRequest();
   server.handleClient();
 
-  if (WiFi.status() == WL_CONNECTED) {
+  if (wifiMulti.run() == WL_CONNECTED) {
     if (!naptStarted) {
       startNat();
     }
@@ -170,7 +188,7 @@ void loop() {
     unsigned long nowMs = millis();
     if (nowMs - lastStaRetry >= STA_RETRY_INTERVAL_MS) {
       lastStaRetry = nowMs;
-      connectArris();
+      Serial.println("No upstream network connected, retrying...");
     }
   }
 }
