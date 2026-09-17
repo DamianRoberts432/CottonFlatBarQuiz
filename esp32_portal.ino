@@ -1,25 +1,33 @@
 #include <WiFi.h>
 #include <WebServer.h>
 #include <DNSServer.h>
+#include "lwip/lwip_napt.h"
+#include "lwip/dns.h"
 
-// Cotton Flat Bar Quiz ESP32 captive portal.
+// Cotton Flat Bar Quiz ESP32 captive portal + Wi-Fi NAT router.
 //
-// The ESP32 creates the OPEN "Cotton Flat Bar Quiz" Wi-Fi network for patrons
-// and for the Raspberry Pi's local quiz connection.
+// The ESP32 does two jobs at once:
+//   1. STATION: joins your existing "Arris-E491" Wi-Fi for internet access.
+//   2. ACCESS POINT: broadcasts the open "Cotton Flat Bar Quiz" network for
+//      the Raspberry Pi and patrons.
 //
-// The Raspberry Pi must use a SECOND network interface for Arris-E491 and
-// GitHub updates: either Ethernet to the Arris router or a USB Wi-Fi adapter.
-// A Raspberry Pi 3B+'s single built-in Wi-Fi radio cannot join both independent
-// Wi-Fi networks at the same time. The ESP32 USB cable supplies power/serial;
-// it is not a network connection.
+// Traffic from the AP side is NAT-forwarded out through the STA (Arris)
+// connection, so anything joined to "Cotton Flat Bar Quiz" -- including the
+// Raspberry Pi -- gets real internet access (for `git pull`, etc.) while
+// still being on the same local network as patrons for the quiz itself.
 //
-// Configure the Pi's interface connected to this AP with the fixed address:
-//   IP address: 192.168.4.4
-//   Netmask:    255.255.255.0
-//   Gateway:    none
-//   DNS:        none
+// The USB cable to the Pi is power/serial only and is NOT used for
+// networking; all traffic moves over Wi-Fi, which is faster and far more
+// reliable than trying to route packets over a serial line.
+//
+// IMPORTANT: Set ARRIS_PASSWORD below before flashing.
 
-const char* AP_SSID = "Cotton Flat Bar Quiz";
+// ---------- EDIT BEFORE FLASHING ----------
+const char* ARRIS_SSID = "Arris-E491";
+const char* ARRIS_PASSWORD = "TYPE_PASSPHRASE_HERE"; // <-- put real Arris-E491 password here
+// -------------------------------------------
+
+const char* AP_SSID = "Cotton Flat Bar Quiz"; // open network, no password
 const char* PI_HOST = "192.168.4.4";
 const uint16_t PI_PORT = 5000;
 
@@ -27,6 +35,10 @@ const byte DNS_PORT = 53;
 IPAddress AP_IP(192, 168, 4, 1);
 IPAddress AP_GATEWAY(192, 168, 4, 1);
 IPAddress AP_SUBNET(255, 255, 255, 0);
+
+const unsigned long STA_RETRY_INTERVAL_MS = 15000;
+unsigned long lastStaRetry = 0;
+bool naptStarted = false;
 
 DNSServer dnsServer;
 WebServer server(80);
@@ -65,35 +77,69 @@ void handleMenu() {
 }
 
 void handleStatus() {
+  String staState;
+  switch (WiFi.status()) {
+    case WL_CONNECTED: staState = "connected"; break;
+    case WL_IDLE_STATUS: staState = "idle"; break;
+    case WL_NO_SSID_AVAIL: staState = "ssid_not_found"; break;
+    case WL_CONNECT_FAILED: staState = "connect_failed"; break;
+    case WL_DISCONNECTED: staState = "disconnected"; break;
+    default: staState = "unknown"; break;
+  }
+
   String json = "{";
-  json += "\"ssid\":\"" + String(AP_SSID) + "\",";
+  json += "\"ap_ssid\":\"" + String(AP_SSID) + "\",";
   json += "\"portal_ip\":\"" + WiFi.softAPIP().toString() + "\",";
   json += "\"pi_url\":\"" + piUrl("/") + "\",";
-  json += "\"connected_clients\":" + String(WiFi.softAPgetStationNum());
+  json += "\"connected_clients\":" + String(WiFi.softAPgetStationNum()) + ",";
+  json += "\"arris_ssid\":\"" + String(ARRIS_SSID) + "\",";
+  json += "\"arris_status\":\"" + staState + "\",";
+  json += "\"arris_ip\":\"" + WiFi.localIP().toString() + "\",";
+  json += "\"nat_active\":" + String(naptStarted ? "true" : "false");
   json += "}";
   server.send(200, "application/json", json);
 }
 
 void handleNotFound() {
   // DNS is redirected to this ESP32, so return the menu for Android, iOS,
-  // Windows, and other captive-portal detection requests.
+  // Windows, and any other captive-portal detection request.
   handleMenu();
+}
+
+void connectArris() {
+  Serial.print("Connecting to Arris Wi-Fi: ");
+  Serial.println(ARRIS_SSID);
+  WiFi.begin(ARRIS_SSID, ARRIS_PASSWORD);
+}
+
+void startNat() {
+  if (naptStarted) return;
+  // Enable IP forwarding + NAPT so devices on the "Cotton Flat Bar Quiz" AP
+  // (192.168.4.0/24) can reach the internet through the Arris connection.
+  ip_napt_enable(AP_IP, 1);
+  // Point the AP-side DNS at whatever DNS the Arris network handed us so
+  // clients (like the Pi) can resolve github.com, etc.
+  dns_setserver(0, dns_getserver(0));
+  naptStarted = true;
+  Serial.println("NAT routing enabled: Cotton Flat Bar Quiz -> Arris-E491 -> Internet.");
 }
 
 void setup() {
   Serial.begin(115200);
   delay(500);
   Serial.println();
-  Serial.println("Cotton Flat Bar Quiz portal starting...");
+  Serial.println("Cotton Flat Bar Quiz portal + NAT router starting...");
 
-  WiFi.mode(WIFI_AP);
+  WiFi.mode(WIFI_AP_STA);
+
   if (!WiFi.softAPConfig(AP_IP, AP_GATEWAY, AP_SUBNET)) {
     Serial.println("Warning: could not configure AP address.");
   }
   if (!WiFi.softAP(AP_SSID)) {
     Serial.println("ERROR: Could not start Wi-Fi access point.");
-    return;
   }
+
+  connectArris();
 
   dnsServer.start(DNS_PORT, "*", AP_IP);
   server.on("/", HTTP_GET, handleMenu);
@@ -107,11 +153,24 @@ void setup() {
   Serial.println(WiFi.softAPIP());
   Serial.print("Raspberry Pi quiz: ");
   Serial.println(piUrl("/"));
-  Serial.println("Pi portal-side IP must be 192.168.4.4.");
-  Serial.println("Pi needs Ethernet or a USB Wi-Fi adapter for Arris-E491/GitHub.");
+  Serial.println("Pi (and patrons) should join Cotton Flat Bar Quiz.");
+  Serial.println("Pi should use IP 192.168.4.4, gateway/DNS 192.168.4.1.");
 }
 
 void loop() {
   dnsServer.processNextRequest();
   server.handleClient();
+
+  if (WiFi.status() == WL_CONNECTED) {
+    if (!naptStarted) {
+      startNat();
+    }
+  } else {
+    naptStarted = false;
+    unsigned long nowMs = millis();
+    if (nowMs - lastStaRetry >= STA_RETRY_INTERVAL_MS) {
+      lastStaRetry = nowMs;
+      connectArris();
+    }
+  }
 }
