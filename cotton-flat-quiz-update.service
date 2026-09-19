@@ -1,5 +1,5 @@
 [Unit]
-Description=Update Cotton Flat Bar Quiz from GitHub at boot
+Description=Update Cotton Flat Bar Quiz from GitHub (via Cotton Flat Bar Quiz portal)
 Wants=network-online.target
 After=network-online.target
 Before=cotton-flat-quiz.service
@@ -10,6 +10,7 @@ User=d
 WorkingDirectory=/home/d/CottonFlatBarQuiz
 ExecStart=/usr/bin/env bash /home/d/CottonFlatBarQuiz/update-quiz.sh
 RemainAfterExit=yes
+TimeoutStartSec=240
 
 [Install]
 WantedBy=multi-user.target
