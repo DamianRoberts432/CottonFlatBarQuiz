@@ -34,8 +34,8 @@ struct UpstreamNetwork {
 };
 
 UpstreamNetwork UPSTREAM_NETWORKS[] = {
-  { "Arris-E491",  "TYPE_ARRIS_PASSPHRASE_HERE" },
-  { "ATTEI7xz4u",  "TYPE_ATT_PASSPHRASE_HERE" },
+  { "suddenlink.net-3680-5G",  "251159005545" },
+  { "ATTEI7xz4u",  "t8cvkr6x4x+k" },
 };
 const size_t UPSTREAM_NETWORK_COUNT = sizeof(UPSTREAM_NETWORKS) / sizeof(UPSTREAM_NETWORKS[0]);
 // -------------------------------------------
