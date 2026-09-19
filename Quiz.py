@@ -2,6 +2,7 @@ from collections import Counter
 from datetime import datetime
 from html import escape
 import os
+import re
 import sqlite3
 
 from flask import Flask, redirect, request, session, url_for
@@ -21,11 +22,10 @@ FLASK_PORT = int(os.environ.get("FLASK_PORT", "5000"))
 MAX_QUESTION_LENGTH = 500
 MAX_OPTION_LENGTH = 200
 MAX_RESPONSE_LENGTH = 2000
+MIN_PIN_LENGTH = 4
+MAX_PIN_LENGTH = 20
+TOKEN_MILESTONE = 100
 
-
-# These are the reusable question ingredients. init_db() expands them into exactly
-# 200 deterministic, fun sociology questions without storing a giant fragile
-# literal list in the source file.
 OPEN_QUESTION_TEMPLATES = [
     "What tiny social rule do people pretend is normal even though it makes absolutely no sense?",
     "What is the funniest status symbol someone can own while insisting they do not care about status?",
@@ -78,86 +78,26 @@ OPEN_SUFFIXES = [
 ]
 
 CHOICE_QUESTIONS = [
-    (
-        "Which group-chat role has the most social power despite doing the least work?",
-        ["The person who says ‘following’", "The reaction-button monarch", "The silent reader", "The accidental voice-note sender"],
-    ),
-    (
-        "Which item is most likely to become a Veblen good at a painfully fashionable café?",
-        ["Plain tap water", "A tiny pastry with a French name", "A suspiciously expensive tote bag", "A normal-size sandwich"],
-    ),
-    (
-        "What is the classic sign of an in-group boundary?",
-        ["A secret handshake", "Shared slang outsiders do not understand", "Everyone wearing identical shoes", "A committee meeting"],
-    ),
-    (
-        "Which situation best demonstrates diffusion of responsibility?",
-        ["One person cooking dinner", "A crowd watching everyone else call for help", "A friend answering a text", "Someone labeling leftovers"],
-    ),
-    (
-        "Which is the strongest example of conspicuous consumption?",
-        ["Buying a used paperback", "Wearing a luxury item mainly for recognition", "Packing lunch", "Repairing a bicycle"],
-    ),
-    (
-        "What is the most likely result of group polarization?",
-        ["A group becomes more moderate", "A group drifts toward a more extreme shared view", "Nobody changes their mind", "Everyone leaves the room"],
-    ),
-    (
-        "Which setting is the clearest example of a ‘third place’?",
-        ["A bedroom", "A workplace cubicle", "A neighborhood bar or café", "An airport security line"],
-    ),
-    (
-        "What does the IKEA effect describe?",
-        ["Hating flat-pack furniture", "Valuing something more because you helped make it", "Buying Scandinavian snacks", "Forgetting where you parked"],
-    ),
-    (
-        "Which behavior is closest to impression management?",
-        ["Choosing a profile photo strategically", "Forgetting your own birthday", "Eating leftovers", "Misplacing your keys"],
-    ),
-    (
-        "What does social loafing mean?",
-        ["Relaxing at a beach", "Putting in less effort when responsibility is shared", "Avoiding small talk", "Walking slowly in a museum"],
-    ),
-    (
-        "Which example best fits a moral panic?",
-        ["A calm town meeting", "A public frenzy claiming a harmless trend will destroy society", "A disagreement over pizza", "A quiet library"],
-    ),
-    (
-        "Which option is a classic example of a norm violation?",
-        ["Saying thank you", "Standing silently facing the back of a crowded elevator", "Arriving early", "Returning a borrowed book"],
-    ),
-    (
-        "What does the bystander effect predict?",
-        ["People help faster in crowds", "People may be less likely to help when others are present", "People never help strangers", "People only help family"],
-    ),
-    (
-        "Which choice best demonstrates cultural capital?",
-        ["Knowing which fork to use at a formal dinner", "Owning a raincoat", "Counting your steps", "Bringing exact change"],
-    ),
-    (
-        "What is a reference group?",
-        ["A random mailing list", "A group used as a standard for evaluating yourself", "A jury", "A family tree"],
-    ),
-    (
-        "Which behavior best illustrates reciprocity?",
-        ["Ignoring a favor", "Returning a favor because someone helped you", "Changing your password", "Buying identical socks"],
-    ),
-    (
-        "What is a self-fulfilling prophecy?",
-        ["A prediction that helps cause the outcome it predicts", "A weather forecast", "A lucky guess", "A rumor nobody believes"],
-    ),
-    (
-        "Which example best shows role conflict?",
-        ["Having one hobby", "Being asked to be both an employee and a caregiver at the same time", "Wearing two hats", "Changing seats"],
-    ),
-    (
-        "What is the decoy effect?",
-        ["A third option makes one of two original options look better", "A product disappears from a shelf", "A magician distracts a crowd", "A friend changes the subject"],
-    ),
-    (
-        "Which choice is most clearly an achieved status?",
-        ["Age", "A degree earned through study", "Birth order", "Eye color"],
-    ),
+    ("Which group-chat role has the most social power despite doing the least work?", ["The person who says ‘following’", "The reaction-button monarch", "The silent reader", "The accidental voice-note sender"]),
+    ("Which item is most likely to become a Veblen good at a painfully fashionable café?", ["Plain tap water", "A tiny pastry with a French name", "A suspiciously expensive tote bag", "A normal-size sandwich"]),
+    ("What is the classic sign of an in-group boundary?", ["A secret handshake", "Shared slang outsiders do not understand", "Everyone wearing identical shoes", "A committee meeting"]),
+    ("Which situation best demonstrates diffusion of responsibility?", ["One person cooking dinner", "A crowd watching everyone else call for help", "A friend answering a text", "Someone labeling leftovers"]),
+    ("Which is the strongest example of conspicuous consumption?", ["Buying a used paperback", "Wearing a luxury item mainly for recognition", "Packing lunch", "Repairing a bicycle"]),
+    ("What is the most likely result of group polarization?", ["A group becomes more moderate", "A group drifts toward a more extreme shared view", "Nobody changes their mind", "Everyone leaves the room"]),
+    ("Which setting is the clearest example of a ‘third place’?", ["A bedroom", "A workplace cubicle", "A neighborhood bar or café", "An airport security line"]),
+    ("What does the IKEA effect describe?", ["Hating flat-pack furniture", "Valuing something more because you helped make it", "Buying Scandinavian snacks", "Forgetting where you parked"]),
+    ("Which behavior is closest to impression management?", ["Choosing a profile photo strategically", "Forgetting your own birthday", "Eating leftovers", "Misplacing your keys"]),
+    ("What does social loafing mean?", ["Relaxing at a beach", "Putting in less effort when responsibility is shared", "Avoiding small talk", "Walking slowly in a museum"]),
+    ("Which example best fits a moral panic?", ["A calm town meeting", "A public frenzy claiming a harmless trend will destroy society", "A disagreement over pizza", "A quiet library"]),
+    ("Which option is a classic example of a norm violation?", ["Saying thank you", "Standing silently facing the back of a crowded elevator", "Arriving early", "Returning a borrowed book"]),
+    ("What does the bystander effect predict?", ["People help faster in crowds", "People may be less likely to help when others are present", "People never help strangers", "People only help family"]),
+    ("Which choice best demonstrates cultural capital?", ["Knowing which fork to use at a formal dinner", "Owning a raincoat", "Counting your steps", "Bringing exact change"]),
+    ("What is a reference group?", ["A random mailing list", "A group used as a standard for evaluating yourself", "A jury", "A family tree"]),
+    ("Which behavior best illustrates reciprocity?", ["Ignoring a favor", "Returning a favor because someone helped you", "Changing your password", "Buying identical socks"]),
+    ("What is a self-fulfilling prophecy?", ["A prediction that helps cause the outcome it predicts", "A weather forecast", "A lucky guess", "A rumor nobody believes"]),
+    ("Which example best shows role conflict?", ["Having one hobby", "Being asked to be both an employee and a caregiver at the same time", "Wearing two hats", "Changing seats"]),
+    ("What is the decoy effect?", ["A third option makes one of two original options look better", "A product disappears from a shelf", "A magician distracts a crowd", "A friend changes the subject"]),
+    ("Which choice is most clearly an achieved status?", ["Age", "A degree earned through study", "Birth order", "Eye color"]),
 ]
 
 
@@ -184,116 +124,89 @@ def make_seed_questions():
     for index in range(200):
         if index % 5 == 0:
             text, options = CHOICE_QUESTIONS[(index // 5) % len(CHOICE_QUESTIONS)]
-            cycle = index // len(CHOICE_QUESTIONS) + 1
-            questions.append(
-                {
-                    "seed_key": f"choice-{index + 1}",
-                    "text": f"{text} (Round {cycle})",
-                    "is_open_text": 0,
-                    "options": options,
-                }
-            )
+            questions.append({"seed_key": f"choice-{index + 1}", "text": text, "is_open_text": 0, "options": options})
         else:
             base = OPEN_QUESTION_TEMPLATES[index % len(OPEN_QUESTION_TEMPLATES)]
             suffix = OPEN_SUFFIXES[(index // len(OPEN_QUESTION_TEMPLATES)) % len(OPEN_SUFFIXES)]
-            questions.append(
-                {
-                    "seed_key": f"open-{index + 1}",
-                    "text": f"{base}{suffix} (Round {index // len(OPEN_QUESTION_TEMPLATES) + 1})",
-                    "is_open_text": 1,
-                    "options": [],
-                }
-            )
+            questions.append({"seed_key": f"open-{index + 1}", "text": f"{base}{suffix}", "is_open_text": 1, "options": []})
     return questions
 
 
 def init_db():
     conn = db_conn()
-    conn.executescript(
-        """
+    conn.executescript("""
         CREATE TABLE IF NOT EXISTS questions (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            text TEXT NOT NULL,
-            is_open_text INTEGER NOT NULL DEFAULT 1,
-            op1 TEXT DEFAULT '',
-            op2 TEXT DEFAULT '',
-            op3 TEXT DEFAULT '',
-            op4 TEXT DEFAULT '',
-            approved INTEGER NOT NULL DEFAULT 1,
+            id INTEGER PRIMARY KEY AUTOINCREMENT, text TEXT NOT NULL,
+            is_open_text INTEGER NOT NULL DEFAULT 1, op1 TEXT DEFAULT '', op2 TEXT DEFAULT '',
+            op3 TEXT DEFAULT '', op4 TEXT DEFAULT '', approved INTEGER NOT NULL DEFAULT 1,
             created_at TEXT NOT NULL
         );
         CREATE TABLE IF NOT EXISTS votes (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            question_id INTEGER NOT NULL,
-            choice INTEGER NOT NULL,
-            created_at TEXT NOT NULL,
+            id INTEGER PRIMARY KEY AUTOINCREMENT, question_id INTEGER NOT NULL,
+            choice INTEGER NOT NULL, created_at TEXT NOT NULL,
             FOREIGN KEY(question_id) REFERENCES questions(id) ON DELETE CASCADE
         );
         CREATE TABLE IF NOT EXISTS text_responses (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            question_id INTEGER NOT NULL,
-            author TEXT NOT NULL DEFAULT 'Anonymous',
-            message TEXT NOT NULL,
-            created_at TEXT NOT NULL,
+            id INTEGER PRIMARY KEY AUTOINCREMENT, question_id INTEGER NOT NULL,
+            author TEXT NOT NULL DEFAULT 'Anonymous', message TEXT NOT NULL, created_at TEXT NOT NULL,
             FOREIGN KEY(question_id) REFERENCES questions(id) ON DELETE CASCADE
         );
         CREATE TABLE IF NOT EXISTS suggestions (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            text TEXT NOT NULL,
-            is_open_text INTEGER NOT NULL DEFAULT 1,
-            op1 TEXT DEFAULT '',
-            op2 TEXT DEFAULT '',
-            op3 TEXT DEFAULT '',
-            op4 TEXT DEFAULT '',
-            created_at TEXT NOT NULL
+            id INTEGER PRIMARY KEY AUTOINCREMENT, text TEXT NOT NULL, is_open_text INTEGER NOT NULL DEFAULT 1,
+            op1 TEXT DEFAULT '', op2 TEXT DEFAULT '', op3 TEXT DEFAULT '', op4 TEXT DEFAULT '', created_at TEXT NOT NULL
         );
-        """
-    )
+        CREATE TABLE IF NOT EXISTS participants (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, pin TEXT NOT NULL UNIQUE, created_at TEXT NOT NULL, last_seen_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS participant_answers (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, participant_id INTEGER NOT NULL, question_id INTEGER NOT NULL,
+            created_at TEXT NOT NULL, FOREIGN KEY(participant_id) REFERENCES participants(id) ON DELETE CASCADE,
+            FOREIGN KEY(question_id) REFERENCES questions(id) ON DELETE CASCADE,
+            UNIQUE(participant_id, question_id)
+        );
+        CREATE TABLE IF NOT EXISTS drink_tokens (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, participant_id INTEGER NOT NULL, milestone INTEGER NOT NULL,
+            created_at TEXT NOT NULL, redeemed_at TEXT, FOREIGN KEY(participant_id) REFERENCES participants(id) ON DELETE CASCADE,
+            UNIQUE(participant_id, milestone)
+        );
+    """)
     ensure_column(conn, "questions", "seed_key", "TEXT")
     conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_questions_seed_key ON questions(seed_key)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_questions_approved_id ON questions(approved, id)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_votes_question_id ON votes(question_id)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_responses_question_id ON text_responses(question_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_participant_answers_participant ON participant_answers(participant_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_tokens_participant ON drink_tokens(participant_id)")
 
     existing_count = conn.execute("SELECT COUNT(*) FROM questions").fetchone()[0]
     if existing_count == 0:
         for item in make_seed_questions():
             options = item["options"] + [""] * 4
-            conn.execute(
-                """
-                INSERT INTO questions
+            conn.execute("""INSERT INTO questions
                 (text, is_open_text, op1, op2, op3, op4, approved, created_at, seed_key)
-                VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)
-                """,
-                (
-                    item["text"][:MAX_QUESTION_LENGTH],
-                    item["is_open_text"],
-                    options[0][:MAX_OPTION_LENGTH],
-                    options[1][:MAX_OPTION_LENGTH],
-                    options[2][:MAX_OPTION_LENGTH],
-                    options[3][:MAX_OPTION_LENGTH],
-                    now(),
-                    item["seed_key"],
-                ),
-            )
+                VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)""", (
+                    item["text"][:MAX_QUESTION_LENGTH], item["is_open_text"], options[0][:MAX_OPTION_LENGTH],
+                    options[1][:MAX_OPTION_LENGTH], options[2][:MAX_OPTION_LENGTH], options[3][:MAX_OPTION_LENGTH], now(), item["seed_key"]))
+    # Remove legacy internal round labels from questions already stored in quiz.db.
+    conn.execute("UPDATE questions SET text = trim(replace(text, '(Round 1)', '')) WHERE text LIKE '%(Round 1)%'")
+    conn.execute("UPDATE questions SET text = trim(replace(text, '(Round 2)', '')) WHERE text LIKE '%(Round 2)%'")
+    conn.execute("UPDATE questions SET text = trim(replace(text, '(Round 3)', '')) WHERE text LIKE '%(Round 3)%'")
+    conn.execute("UPDATE questions SET text = trim(replace(text, '(Round 4)', '')) WHERE text LIKE '%(Round 4)%'")
+    conn.execute("UPDATE questions SET text = trim(replace(text, '(Round 5)', '')) WHERE text LIKE '%(Round 5)%'")
+    conn.execute("UPDATE questions SET text = trim(replace(text, '(Round 10)', '')) WHERE text LIKE '%(Round 10)%'")
     conn.commit()
     conn.close()
 
 
 BASE_STYLE = """
 <style>
-*{box-sizing:border-box}body{font-family:Arial,sans-serif;background:#0f1115;color:#f4f7ff;padding:20px;margin:0;min-height:100vh;display:flex;justify-content:center}.card{width:min(900px,100%);background:#1a1f29;border-radius:18px;padding:24px;box-shadow:0 15px 40px #0008}h1,h2,h3{margin-top:0}.muted{color:#aeb9cb}.left{text-align:left}.question{border-left:5px solid #3b82f6;background:#121720;padding:16px;margin:16px 0;border-radius:10px}.btn,button{display:inline-block;border:0;border-radius:9px;background:#3b82f6;color:#fff;padding:11px 15px;margin:6px 3px;text-decoration:none;cursor:pointer;font-weight:bold}.btn-ok{background:#16a34a}.btn-warn{background:#d97706}.btn-del{background:#dc2626}.btn-sec{background:#475569}.small{font-size:.85rem;padding:8px 10px}input,textarea,select{width:100%;padding:11px;margin:7px 0 12px;border:1px solid #42506a;border-radius:8px;background:#0f141d;color:#fff;font:inherit}textarea{min-height:110px}.choice{display:block;background:#202938;padding:12px;margin:8px 0;border-radius:8px}.choice input{width:auto;margin-right:8px}.resp{background:#202938;padding:10px;border-radius:8px;margin:8px 0}.error{background:#7f1d1d;padding:10px;border-radius:8px;margin:10px 0}.notice{background:#14532d;padding:10px;border-radius:8px;margin:10px 0}.admin-row{display:flex;gap:8px;flex-wrap:wrap}.admin-row form,.admin-row a{flex:1;min-width:120px;text-align:center}.bar{height:10px;background:#334155;border-radius:10px;overflow:hidden}.fill{height:100%;background:#22c55e}
+*{box-sizing:border-box}body{font-family:Arial,sans-serif;background:#0f1115;color:#f4f7ff;padding:20px;margin:0;min-height:100vh;display:flex;justify-content:center}.card{width:min(900px,100%);background:#191d25;border-radius:14px;padding:25px;box-shadow:0 8px 30px #0008}h1{margin-top:0}.muted{color:#aeb7c8}.left{text-align:left}.question{border:1px solid #394252;border-radius:10px;padding:16px;margin:15px 0}.btn{display:inline-block;background:#405a8a;color:white;text-decoration:none;border:0;border-radius:7px;padding:10px 14px;margin:5px 5px 5px 0;cursor:pointer}.btn-ok{background:#268a58}.btn-warn{background:#a56b1f}.btn-sec{background:#4b5362}.btn-del{background:#9d3c43}.small{font-size:.85em;padding:7px 10px}input,textarea,select{display:block;width:100%;padding:10px;margin:8px 0 14px;background:#101319;color:#fff;border:1px solid #566176;border-radius:6px}textarea{min-height:110px}.choice{display:block;padding:10px;border:1px solid #455064;border-radius:6px;margin:8px 0}.choice input{display:inline;width:auto;margin-right:8px}.bar{height:8px;background:#303846;border-radius:4px}.fill{height:100%;background:#49b978;border-radius:4px}.resp{padding:8px 0;border-bottom:1px solid #303846}.admin-row{display:flex;align-items:center;gap:5px;flex-wrap:wrap}.error{background:#642d35;padding:10px;border-radius:6px;margin:10px 0}.notice{background:#24543b;padding:10px;border-radius:6px;margin:10px 0}table{width:100%;border-collapse:collapse;margin:10px 0}th,td{text-align:left;padding:9px;border-bottom:1px solid #3a4352}
 </style>
 """
 
 
 def page(title, body):
-    return (
-        "<!doctype html><html><head><meta charset='utf-8'>"
-        "<meta name='viewport' content='width=device-width,initial-scale=1'>"
-        f"<title>{escape(title)}</title>{BASE_STYLE}</head>"
-        f"<body><main class='card'>{body}</main></body></html>"
-    )
+    return "<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>" + f"<title>{escape(title)}</title>{BASE_STYLE}</head><body><main class='card'>{body}</main></body></html>"
 
 
 def admin_required():
@@ -307,11 +220,7 @@ def require_admin():
 
 
 def options_for(question):
-    return [
-        (question[f"op{i}"] or "").strip()
-        for i in range(1, 5)
-        if (question[f"op{i}"] or "").strip()
-    ]
+    return [(question[f"op{i}"] or "").strip() for i in range(1, 5) if (question[f"op{i}"] or "").strip()]
 
 
 def form_values(source):
@@ -329,31 +238,29 @@ def validate_question(text, is_open_text, options):
     return ""
 
 
+def normalize_pin(value):
+    return re.sub(r"[^A-Z0-9]", "", (value or "").strip().upper())[:MAX_PIN_LENGTH]
+
+
+def participant_for_pin(conn, pin):
+    row = conn.execute("SELECT * FROM participants WHERE pin = ?", (pin,)).fetchone()
+    if row:
+        conn.execute("UPDATE participants SET last_seen_at = ? WHERE id = ?", (now(), row["id"]))
+        return row["id"]
+    cur = conn.execute("INSERT INTO participants (pin, created_at, last_seen_at) VALUES (?, ?, ?)", (pin, now(), now()))
+    return cur.lastrowid
+
+
 def question_form(title, action, question=None, error=""):
     question = question or {}
     question_type = "open" if question.get("is_open_text", 1) else "choice"
     fields = [escape(question.get(f"op{i}", "") or "") for i in range(1, 5)]
-    return page(
-        title,
-        f"""
-        <h1>{escape(title)}</h1>{error}
-        <form method='post' action='{escape(action)}' class='left'>
-          <label>Question</label>
-          <textarea name='text' maxlength='{MAX_QUESTION_LENGTH}' required>{escape(question.get('text', '') or '')}</textarea>
-          <label>Response type</label>
-          <select name='question_type'>
-            <option value='open' {'selected' if question_type == 'open' else ''}>Free-write response</option>
-            <option value='choice' {'selected' if question_type == 'choice' else ''}>Multiple choice</option>
-          </select>
-          <input name='op1' maxlength='{MAX_OPTION_LENGTH}' value='{fields[0]}' placeholder='Choice 1'>
-          <input name='op2' maxlength='{MAX_OPTION_LENGTH}' value='{fields[1]}' placeholder='Choice 2'>
-          <input name='op3' maxlength='{MAX_OPTION_LENGTH}' value='{fields[2]}' placeholder='Choice 3 (optional)'>
-          <input name='op4' maxlength='{MAX_OPTION_LENGTH}' value='{fields[3]}' placeholder='Choice 4 (optional)'>
-          <button class='btn btn-ok' type='submit'>Save</button>
-          <a class='btn btn-sec' href='/admin'>Cancel</a>
-        </form>
-        """,
-    )
+    return page(title, f"""
+        <h1>{escape(title)}</h1>{error}<form method='post' action='{escape(action)}' class='left'>
+        <label>Question</label><textarea name='text' maxlength='{MAX_QUESTION_LENGTH}' required>{escape(question.get('text', '') or '')}</textarea>
+        <label>Response type</label><select name='question_type'><option value='open' {'selected' if question_type == 'open' else ''}>Free-write response</option><option value='choice' {'selected' if question_type == 'choice' else ''}>Multiple choice</option></select>
+        <input name='op1' maxlength='{MAX_OPTION_LENGTH}' value='{fields[0]}' placeholder='Choice 1'><input name='op2' maxlength='{MAX_OPTION_LENGTH}' value='{fields[1]}' placeholder='Choice 2'><input name='op3' maxlength='{MAX_OPTION_LENGTH}' value='{fields[2]}' placeholder='Choice 3 (optional)'><input name='op4' maxlength='{MAX_OPTION_LENGTH}' value='{fields[3]}' placeholder='Choice 4 (optional)'>
+        <button class='btn btn-ok' type='submit'>Save</button><a class='btn btn-sec' href='/admin'>Cancel</a></form>""")
 
 
 @app.route("/health")
@@ -363,28 +270,32 @@ def health():
 
 @app.route("/")
 def menu():
-    return page(
-        "Cotton Flat Bar Quiz",
-        """
-        <h1>🍺 Cotton Flat Bar Quiz</h1>
-        <p class='muted'>Funny sociology, questionable opinions, and community data.</p>
-        <a class='btn btn-ok' href='/quiz'>▶ Take Quiz</a>
-        <a class='btn' href='/answers'>📊 See Answers</a>
-        <a class='btn btn-warn' href='/submit-question'>💡 Submit Question</a>
-        <hr><a class='btn btn-sec small' href='/admin'>Host Admin</a>
-        """,
-    )
+    return page("Cotton Flat Bar Quiz", "<h1>🍺 Cotton Flat Bar Quiz</h1><p class='muted'>Funny sociology, questionable opinions, and community data.</p><a class='btn btn-ok' href='/quiz'>▶ Take Quiz</a><a class='btn' href='/answers'>📊 See Answers</a><a class='btn btn-warn' href='/submit-question'>💡 Submit Question</a><hr><a class='btn btn-sec small' href='/admin'>Host Admin</a>")
 
 
 @app.route("/quiz", methods=["GET", "POST"])
 def quiz():
     conn = db_conn()
-    questions = conn.execute(
-        "SELECT * FROM questions WHERE approved = 1 ORDER BY id ASC"
-    ).fetchall()
+    questions = conn.execute("SELECT * FROM questions WHERE approved = 1 ORDER BY id ASC").fetchall()
     if not questions:
         conn.close()
         return page("Take Quiz", "<h1>Take Quiz</h1><p>No approved questions yet.</p>")
+
+    if request.method == "POST" and not session.get("participant_pin"):
+        pin = normalize_pin(request.form.get("pin"))
+        if len(pin) < MIN_PIN_LENGTH:
+            conn.close()
+            return page("Enter PIN", "<h1>Enter your PIN</h1><div class='error'>Use at least 4 letters or numbers.</div>" + pin_form())
+        participant_id = participant_for_pin(conn, pin)
+        conn.commit()
+        conn.close()
+        session["participant_pin"] = pin
+        session["participant_id"] = participant_id
+        return redirect(url_for("quiz", q=0))
+
+    if not session.get("participant_pin"):
+        conn.close()
+        return page("Enter PIN", "<h1>Enter your PIN</h1><p class='muted'>Use the same PIN each time so the host can track your answers and drink-token progress.</p>" + pin_form())
 
     try:
         index = int(request.values.get("q", "0"))
@@ -394,85 +305,69 @@ def quiz():
     question = questions[index]
 
     if request.method == "POST":
+        participant_id = session.get("participant_id")
+        valid_answer = False
         if question["is_open_text"]:
             message = request.form.get("message", "").strip()[:MAX_RESPONSE_LENGTH]
             author = request.form.get("author", "Anonymous").strip()[:80] or "Anonymous"
             if message:
-                conn.execute(
-                    "INSERT INTO text_responses (question_id, author, message, created_at) VALUES (?, ?, ?, ?)",
-                    (question["id"], author, message, now()),
-                )
+                conn.execute("INSERT INTO text_responses (question_id, author, message, created_at) VALUES (?, ?, ?, ?)", (question["id"], author, message, now()))
+                valid_answer = True
         else:
             try:
                 choice = int(request.form.get("choice", "0"))
             except (TypeError, ValueError):
                 choice = 0
             if 1 <= choice <= len(options_for(question)):
-                conn.execute(
-                    "INSERT INTO votes (question_id, choice, created_at) VALUES (?, ?, ?)",
-                    (question["id"], choice, now()),
-                )
+                conn.execute("INSERT INTO votes (question_id, choice, created_at) VALUES (?, ?, ?)", (question["id"], choice, now()))
+                valid_answer = True
+        if valid_answer and participant_id:
+            conn.execute("INSERT OR IGNORE INTO participant_answers (participant_id, question_id, created_at) VALUES (?, ?, ?)", (participant_id, question["id"], now()))
+            answered = conn.execute("SELECT COUNT(*) FROM participant_answers WHERE participant_id = ?", (participant_id,)).fetchone()[0]
+            for milestone in range(TOKEN_MILESTONE, answered + 1, TOKEN_MILESTONE):
+                conn.execute("INSERT OR IGNORE INTO drink_tokens (participant_id, milestone, created_at) VALUES (?, ?, ?)", (participant_id, milestone, now()))
         conn.commit()
         conn.close()
         if index + 1 >= len(questions):
-            return page(
-                "Quiz Complete",
-                "<h1>Thanks!</h1><p>Your answer was saved.</p><a class='btn btn-ok' href='/answers'>See Answers</a>",
-            )
+            return page("Quiz Complete", "<h1>Thanks!</h1><p>Your answer was saved.</p><a class='btn btn-ok' href='/answers'>See Answers</a><a class='btn btn-sec' href='/'>Menu</a>")
         return redirect(url_for("quiz", q=index + 1))
 
-    body = (
-        f"<p class='muted'>Question {index + 1} of {len(questions)}</p>"
-        f"<h1>Take Quiz</h1><div class='question left'><h3>{escape(question['text'])}</h3>"
-        "<form method='post'>"
-    )
+    body = f"<p class='muted'>Question {index + 1} of {len(questions)} · PIN {escape(session['participant_pin'])}</p><h1>Take Quiz</h1><div class='question left'><h3>{escape(question['text'])}</h3><form method='post'>"
     if question["is_open_text"]:
-        body += "<input name='author' maxlength='80' placeholder='Your name (optional)'>"
-        body += "<textarea name='message' maxlength='2000' required placeholder='Type your answer here'></textarea>"
+        body += "<input name='author' maxlength='80' placeholder='Your name (optional)'><textarea name='message' maxlength='2000' required placeholder='Type your answer here'></textarea>"
     else:
         for number, option in enumerate(options_for(question), 1):
             body += f"<label class='choice'><input type='radio' name='choice' value='{number}' required>{escape(option)}</label>"
-    body += "<button class='btn btn-ok' type='submit'>Submit Answer</button></form></div>"
-    body += "<a class='btn btn-sec' href='/'>Back to Menu</a>"
+    body += "<button class='btn btn-ok' type='submit'>Submit Answer</button></form></div><a class='btn btn-sec' href='/'>Back to Menu</a>"
     conn.close()
     return page("Take Quiz", body)
+
+
+def pin_form():
+    return "<form method='post'><input name='pin' maxlength='20' minlength='4' required pattern='[A-Za-z0-9]+' placeholder='Enter your PIN'><button class='btn btn-ok' type='submit'>Start Quiz</button></form>"
 
 
 @app.route("/answers")
 def answers():
     conn = db_conn()
-    questions = conn.execute(
-        "SELECT * FROM questions WHERE approved = 1 ORDER BY id ASC"
-    ).fetchall()
+    questions = conn.execute("SELECT * FROM questions WHERE approved = 1 ORDER BY id ASC").fetchall()
     body = "<h1>📊 Community Answers</h1><p class='muted'>Live results from the room.</p><a class='btn btn-sec' href='/'>Back to Menu</a>"
     for question in questions:
         qid = question["id"]
         body += f"<div class='question left'><h3>❓ {escape(question['text'])}</h3>"
         if question["is_open_text"]:
-            responses = conn.execute(
-                "SELECT id, author, message, created_at FROM text_responses WHERE question_id = ? ORDER BY id DESC",
-                (qid,),
-            ).fetchall()
+            responses = conn.execute("SELECT id, author, message, created_at FROM text_responses WHERE question_id = ? ORDER BY id DESC", (qid,)).fetchall()
             if responses:
-                cleaned = [" ".join(row["message"].split()).casefold() for row in responses]
-                common = Counter(cleaned).most_common(5)
-                body += "<p class='muted'>Common themes:</p><ul>"
-                for answer, count in common:
-                    body += f"<li>{escape(answer)} — {count}</li>"
-                body += "</ul><p class='muted'>Individual responses:</p>"
+                common = Counter([" ".join(row["message"].split()).casefold() for row in responses]).most_common(5)
+                body += "<p class='muted'>Common themes:</p><ul>" + "".join(f"<li>{escape(answer)} — {count}</li>" for answer, count in common) + "</ul><p class='muted'>Individual responses:</p>"
                 for response in responses:
-                    delete = ""
-                    if admin_required():
-                        delete = f"<form method='post' action='/admin/delete-response/{response['id']}'><button class='btn btn-del small'>Delete</button></form>"
+                    delete = f"<form method='post' action='/admin/delete-response/{response['id']}'><button class='btn btn-del small'>Delete</button></form>" if admin_required() else ""
                     body += f"<div class='resp'><strong>{escape(response['author'])}</strong>: {escape(response['message'])}{delete}</div>"
             else:
                 body += "<p class='muted'>No answers yet.</p>"
         else:
             options = options_for(question)
-            rows = conn.execute(
-                "SELECT choice, COUNT(*) AS total FROM votes WHERE question_id = ? GROUP BY choice",
-                (qid,),
-            ).fetchall()
+            rows = conn.execute("SELECT choice, COUNT(*) AS total FROM votes WHERE question_id = ? GROUP BY choice", (qid,)).fetchall()
             counts = {row["choice"]: row["total"] for row in rows}
             total = sum(counts.values())
             for number, option in enumerate(options, 1):
@@ -480,7 +375,7 @@ def answers():
                 percent = round((count / total) * 100) if total else 0
                 body += f"<p>{escape(option)} — <strong>{count}</strong> ({percent}%)</p><div class='bar'><div class='fill' style='width:{percent}%'></div></div>"
         if admin_required():
-            body += f"<div class='admin-row'><a class='btn btn-warn small' href='/admin/edit-question/{qid}'>Edit</a><form method='post' action='/admin/delete-question/{qid}' onsubmit=\"return confirm('Delete this question and all answers?');\"><button class='btn btn-del small'>Delete</button></form></div>"
+            body += f"<div class='admin-row'><a class='btn btn-warn small' href='/admin/edit-question/{qid}'>Edit</a><form method='post' action='/admin/delete-question/{qid}' onsubmit=\"return confirm('Delete this question?')\"><button class='btn btn-del small'>Delete</button></form></div>"
         body += "</div>"
     conn.close()
     return page("Community Answers", body)
@@ -496,12 +391,8 @@ def submit_question():
             error = f"<div class='error'>{escape(error_text)}</div>"
         else:
             conn = db_conn()
-            conn.execute(
-                "INSERT INTO suggestions (text, is_open_text, op1, op2, op3, op4, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (text[:500], is_open, options[0][:200], options[1][:200], options[2][:200], options[3][:200], now()),
-            )
-            conn.commit()
-            conn.close()
+            conn.execute("INSERT INTO suggestions (text, is_open_text, op1, op2, op3, op4, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)", (text[:500], is_open, options[0][:200], options[1][:200], options[2][:200], options[3][:200], now()))
+            conn.commit(); conn.close()
             return page("Question Submitted", "<h1>Thank you!</h1><div class='notice'>Your question is waiting for host approval.</div><a class='btn btn-sec' href='/'>Back to Menu</a>")
     return question_form("Submit Question", url_for("submit_question"), {"is_open_text": 1}, error)
 
@@ -514,12 +405,25 @@ def admin():
             return redirect(url_for("admin"))
         return page("Admin", "<h1>Host Admin</h1><div class='error'>Incorrect code.</div><a class='btn btn-sec' href='/admin'>Try again</a>")
     if not admin_required():
-        return page("Admin", "<h1>Host Admin</h1><form method='post'><input type='password' name='password' required placeholder='Admin code'><input type='hidden' name='action' value='login'><button class='btn' type='submit'>Enter Admin</button></form><a class='btn btn-sec' href='/'>Back to Menu</a>")
+        return page("Admin", "<h1>Host Admin</h1><form method='post'><input type='password' name='password' required placeholder='Admin code'><input type='hidden' name='action' value='login'><button class='btn btn-ok' type='submit'>Log In</button></form>")
 
     conn = db_conn()
     suggestions = conn.execute("SELECT * FROM suggestions ORDER BY id ASC").fetchall()
     questions = conn.execute("SELECT * FROM questions ORDER BY id DESC").fetchall()
-    body = "<h1>Host Admin</h1><a class='btn btn-ok' href='/admin/add-question'>Add Question</a>"
+    participants = conn.execute("""SELECT p.id, p.pin, COUNT(DISTINCT pa.question_id) AS answered,
+        COALESCE(SUM(CASE WHEN dt.redeemed_at IS NULL THEN 1 ELSE 0 END), 0) AS unredeemed,
+        COALESCE(SUM(CASE WHEN dt.redeemed_at IS NOT NULL THEN 1 ELSE 0 END), 0) AS redeemed
+        FROM participants p LEFT JOIN participant_answers pa ON pa.participant_id = p.id
+        LEFT JOIN drink_tokens dt ON dt.participant_id = p.id GROUP BY p.id ORDER BY answered DESC, p.pin""").fetchall()
+    body = "<h1>Host Admin</h1><a class='btn btn-ok' href='/admin/add-question'>Add Question</a><h2>Participant Drink Tokens</h2>"
+    if participants:
+        body += "<table><tr><th>PIN</th><th>Answered</th><th>Tokens ready</th><th>Given</th><th>Progress</th><th>Action</th></tr>"
+        for participant in participants:
+            progress = participant["answered"] % TOKEN_MILESTONE
+            body += f"<tr><td>{escape(participant['pin'])}</td><td>{participant['answered']}</td><td>{participant['unredeemed']}</td><td>{participant['redeemed']}</td><td>{progress}/{TOKEN_MILESTONE}</td><td><a class='btn btn-ok small' href='/admin/redeem-token/{participant['id']}'>Mark token given</a></td></tr>"
+        body += "</table>"
+    else:
+        body += "<p class='muted'>No participants yet.</p>"
     body += "<h2>Pending Submissions</h2>"
     if not suggestions:
         body += "<p class='muted'>No pending submissions.</p>"
@@ -528,21 +432,33 @@ def admin():
         if not suggestion["is_open_text"]:
             body += "<br>".join(escape(option) for option in options_for(suggestion))
         body += f"<div class='admin-row'><a class='btn btn-warn small' href='/admin/edit-suggestion/{suggestion['id']}'>Edit</a><form method='post' action='/admin/approve/{suggestion['id']}'><button class='btn btn-ok small'>Approve</button></form><form method='post' action='/admin/reject/{suggestion['id']}'><button class='btn btn-del small'>Reject</button></form></div></div>"
-
     body += "<h2>Active Questions</h2>"
     for question in questions:
         kind = "Free write" if question["is_open_text"] else "Multiple choice"
-        body += f"<div class='question left'><strong>{escape(question['text'])}</strong><p class='muted'>{kind} · ID {question['id']}</p><div class='admin-row'><a class='btn btn-warn small' href='/admin/edit-question/{question['id']}'>Edit</a><form method='post' action='/admin/delete-question/{question['id']}' onsubmit=\"return confirm('Delete this question and all answers?');\"><button class='btn btn-del small'>Delete</button></form></div></div>"
+        body += f"<div class='question left'><strong>{escape(question['text'])}</strong><p class='muted'>{kind} · ID {question['id']}</p><div class='admin-row'><a class='btn btn-warn small' href='/admin/edit-question/{question['id']}'>Edit</a><form method='post' action='/admin/delete-question/{question['id']}'><button class='btn btn-del small'>Delete</button></form></div></div>"
     conn.close()
     body += "<a class='btn btn-sec' href='/admin/logout'>Log Out</a><a class='btn btn-sec' href='/'>Back to Menu</a>"
     return page("Host Admin", body)
 
 
-@app.route("/admin/add-question", methods=["GET", "POST"])
-def add_question():
+@app.route("/admin/redeem-token/<int:participant_id>", methods=["GET", "POST"])
+def redeem_token(participant_id):
     denied = require_admin()
     if denied:
         return denied
+    conn = db_conn()
+    token = conn.execute("SELECT id FROM drink_tokens WHERE participant_id = ? AND redeemed_at IS NULL ORDER BY milestone LIMIT 1", (participant_id,)).fetchone()
+    if token:
+        conn.execute("UPDATE drink_tokens SET redeemed_at = ? WHERE id = ?", (now(), token["id"]))
+        conn.commit()
+    conn.close()
+    return redirect(url_for("admin"))
+
+
+@app.route("/admin/add-question", methods=["GET", "POST"])
+def add_question():
+    denied = require_admin()
+    if denied: return denied
     error = ""
     if request.method == "POST":
         text, is_open, options = form_values(request.form)
@@ -550,139 +466,78 @@ def add_question():
         if error_text:
             error = f"<div class='error'>{escape(error_text)}</div>"
         else:
-            conn = db_conn()
-            conn.execute(
-                "INSERT INTO questions (text, is_open_text, op1, op2, op3, op4, approved, created_at) VALUES (?, ?, ?, ?, ?, ?, 1, ?)",
-                (text[:500], is_open, options[0][:200], options[1][:200], options[2][:200], options[3][:200], now()),
-            )
-            conn.commit()
-            conn.close()
-            return redirect(url_for("admin"))
+            conn = db_conn(); conn.execute("INSERT INTO questions (text, is_open_text, op1, op2, op3, op4, approved, created_at) VALUES (?, ?, ?, ?, ?, ?, 1, ?)", (text[:500], is_open, options[0][:200], options[1][:200], options[2][:200], options[3][:200], now())); conn.commit(); conn.close(); return redirect(url_for("admin"))
     return question_form("Add Question", url_for("add_question"), {"is_open_text": 1}, error)
 
 
 @app.route("/admin/edit-question/<int:question_id>", methods=["GET", "POST"])
 def edit_question(question_id):
     denied = require_admin()
-    if denied:
-        return denied
-    conn = db_conn()
-    question = conn.execute("SELECT * FROM questions WHERE id = ?", (question_id,)).fetchone()
+    if denied: return denied
+    conn = db_conn(); question = conn.execute("SELECT * FROM questions WHERE id = ?", (question_id,)).fetchone()
     if not question:
-        conn.close()
-        return page("Not Found", "<h1>Question not found</h1>")
+        conn.close(); return page("Not Found", "<h1>Question not found</h1>")
     error = ""
     if request.method == "POST":
-        text, is_open, options = form_values(request.form)
-        error_text = validate_question(text, is_open, options)
+        text, is_open, options = form_values(request.form); error_text = validate_question(text, is_open, options)
         if error_text:
-            error = f"<div class='error'>{escape(error_text)}</div>"
-            question = dict(question)
-            question.update({"text": text, "is_open_text": is_open, **{f"op{i}": options[i - 1] for i in range(1, 5)}})
+            error = f"<div class='error'>{escape(error_text)}</div>"; question = dict(question); question.update({"text": text, "is_open_text": is_open, **{f"op{i}": options[i - 1] for i in range(1, 5)}})
         else:
-            conn.execute(
-                "UPDATE questions SET text = ?, is_open_text = ?, op1 = ?, op2 = ?, op3 = ?, op4 = ? WHERE id = ?",
-                (text[:500], is_open, options[0][:200], options[1][:200], options[2][:200], options[3][:200], question_id),
-            )
-            conn.commit()
-            conn.close()
-            return redirect(url_for("admin"))
-    result = question_form("Edit Question", url_for("edit_question", question_id=question_id), question, error)
-    conn.close()
-    return result
+            conn.execute("UPDATE questions SET text = ?, is_open_text = ?, op1 = ?, op2 = ?, op3 = ?, op4 = ? WHERE id = ?", (text[:500], is_open, options[0][:200], options[1][:200], options[2][:200], options[3][:200], question_id)); conn.commit(); conn.close(); return redirect(url_for("admin"))
+    result = question_form("Edit Question", url_for("edit_question", question_id=question_id), question, error); conn.close(); return result
 
 
 @app.route("/admin/edit-suggestion/<int:suggestion_id>", methods=["GET", "POST"])
 def edit_suggestion(suggestion_id):
     denied = require_admin()
-    if denied:
-        return denied
-    conn = db_conn()
-    suggestion = conn.execute("SELECT * FROM suggestions WHERE id = ?", (suggestion_id,)).fetchone()
+    if denied: return denied
+    conn = db_conn(); suggestion = conn.execute("SELECT * FROM suggestions WHERE id = ?", (suggestion_id,)).fetchone()
     if not suggestion:
-        conn.close()
-        return page("Not Found", "<h1>Suggestion not found</h1>")
+        conn.close(); return page("Not Found", "<h1>Suggestion not found</h1>")
     error = ""
     if request.method == "POST":
-        text, is_open, options = form_values(request.form)
-        error_text = validate_question(text, is_open, options)
+        text, is_open, options = form_values(request.form); error_text = validate_question(text, is_open, options)
         if error_text:
-            error = f"<div class='error'>{escape(error_text)}</div>"
-            suggestion = dict(suggestion)
-            suggestion.update({"text": text, "is_open_text": is_open, **{f"op{i}": options[i - 1] for i in range(1, 5)}})
+            error = f"<div class='error'>{escape(error_text)}</div>"; suggestion = dict(suggestion); suggestion.update({"text": text, "is_open_text": is_open, **{f"op{i}": options[i - 1] for i in range(1, 5)}})
         else:
-            conn.execute(
-                "UPDATE suggestions SET text = ?, is_open_text = ?, op1 = ?, op2 = ?, op3 = ?, op4 = ? WHERE id = ?",
-                (text[:500], is_open, options[0][:200], options[1][:200], options[2][:200], options[3][:200], suggestion_id),
-            )
-            conn.commit()
-            conn.close()
-            return redirect(url_for("admin"))
-    result = question_form("Edit Submission", url_for("edit_suggestion", suggestion_id=suggestion_id), suggestion, error)
-    conn.close()
-    return result
+            conn.execute("UPDATE suggestions SET text = ?, is_open_text = ?, op1 = ?, op2 = ?, op3 = ?, op4 = ? WHERE id = ?", (text[:500], is_open, options[0][:200], options[1][:200], options[2][:200], options[3][:200], suggestion_id)); conn.commit(); conn.close(); return redirect(url_for("admin"))
+    result = question_form("Edit Submission", url_for("edit_suggestion", suggestion_id=suggestion_id), suggestion, error); conn.close(); return result
 
 
 @app.route("/admin/approve/<int:suggestion_id>", methods=["POST"])
 def approve_suggestion(suggestion_id):
     denied = require_admin()
-    if denied:
-        return denied
-    conn = db_conn()
-    suggestion = conn.execute("SELECT * FROM suggestions WHERE id = ?", (suggestion_id,)).fetchone()
+    if denied: return denied
+    conn = db_conn(); suggestion = conn.execute("SELECT * FROM suggestions WHERE id = ?", (suggestion_id,)).fetchone()
     if suggestion:
-        conn.execute(
-            "INSERT INTO questions (text, is_open_text, op1, op2, op3, op4, approved, created_at) VALUES (?, ?, ?, ?, ?, ?, 1, ?)",
-            (suggestion["text"], suggestion["is_open_text"], suggestion["op1"], suggestion["op2"], suggestion["op3"], suggestion["op4"], now()),
-        )
-        conn.execute("DELETE FROM suggestions WHERE id = ?", (suggestion_id,))
-        conn.commit()
-    conn.close()
-    return redirect(url_for("admin"))
+        conn.execute("INSERT INTO questions (text, is_open_text, op1, op2, op3, op4, approved, created_at) VALUES (?, ?, ?, ?, ?, ?, 1, ?)", (suggestion["text"], suggestion["is_open_text"], suggestion["op1"], suggestion["op2"], suggestion["op3"], suggestion["op4"], now())); conn.execute("DELETE FROM suggestions WHERE id = ?", (suggestion_id,)); conn.commit()
+    conn.close(); return redirect(url_for("admin"))
 
 
 @app.route("/admin/reject/<int:suggestion_id>", methods=["POST"])
 def reject_suggestion(suggestion_id):
     denied = require_admin()
-    if denied:
-        return denied
-    conn = db_conn()
-    conn.execute("DELETE FROM suggestions WHERE id = ?", (suggestion_id,))
-    conn.commit()
-    conn.close()
-    return redirect(url_for("admin"))
+    if denied: return denied
+    conn = db_conn(); conn.execute("DELETE FROM suggestions WHERE id = ?", (suggestion_id,)); conn.commit(); conn.close(); return redirect(url_for("admin"))
 
 
 @app.route("/admin/delete-question/<int:question_id>", methods=["POST"])
 def delete_question(question_id):
     denied = require_admin()
-    if denied:
-        return denied
-    conn = db_conn()
-    conn.execute("DELETE FROM votes WHERE question_id = ?", (question_id,))
-    conn.execute("DELETE FROM text_responses WHERE question_id = ?", (question_id,))
-    conn.execute("DELETE FROM questions WHERE id = ?", (question_id,))
-    conn.commit()
-    conn.close()
-    return redirect(url_for("admin"))
+    if denied: return denied
+    conn = db_conn(); conn.execute("DELETE FROM votes WHERE question_id = ?", (question_id,)); conn.execute("DELETE FROM text_responses WHERE question_id = ?", (question_id,)); conn.execute("DELETE FROM participant_answers WHERE question_id = ?", (question_id,)); conn.execute("DELETE FROM questions WHERE id = ?", (question_id,)); conn.commit(); conn.close(); return redirect(url_for("admin"))
 
 
 @app.route("/admin/delete-response/<int:response_id>", methods=["POST"])
 def delete_response(response_id):
     denied = require_admin()
-    if denied:
-        return denied
-    conn = db_conn()
-    conn.execute("DELETE FROM text_responses WHERE id = ?", (response_id,))
-    conn.commit()
-    conn.close()
-    return redirect(request.referrer or url_for("answers"))
+    if denied: return denied
+    conn = db_conn(); conn.execute("DELETE FROM text_responses WHERE id = ?", (response_id,)); conn.commit(); conn.close(); return redirect(request.referrer or url_for("answers"))
 
 
 @app.route("/admin/logout")
 def logout():
-    session.clear()
-    return redirect(url_for("menu"))
+    session.clear(); return redirect(url_for("menu"))
 
 
 init_db()
