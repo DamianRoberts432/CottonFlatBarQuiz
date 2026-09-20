@@ -24,16 +24,17 @@ const size_t UPSTREAM_NETWORK_COUNT = sizeof(UPSTREAM_NETWORKS) / sizeof(UPSTREA
 // -------------------------------------------
 
 const char* AP_SSID = "Cotton Flat Bar Quiz"; // open network, no password
+const char* AP_PASSWORD = "";                 // empty password = open AP
 const char* PI_HOST = "192.168.4.4";
 const uint16_t PI_PORT = 5000;
 
 const byte DNS_PORT = 53;
-IPAddress AP_IP(192, 168, 4, 1);
-IPAddress AP_GATEWAY(192, 168, 4, 1);
-IPAddress AP_SUBNET(255, 255, 255, 0);
+const IPAddress AP_IP(192, 168, 4, 1);
+const IPAddress AP_GATEWAY(192, 168, 4, 1);
+const IPAddress AP_SUBNET(255, 255, 255, 0);
 
-// Wi-Fi Check Interval: Check upstream status every 5 seconds.
-const unsigned long WIFI_CHECK_INTERVAL_MS = 5000; 
+// Wi-Fi check interval: check upstream status every 5 seconds.
+const unsigned long WIFI_CHECK_INTERVAL_MS = 5000;
 unsigned long lastWifiCheck = 0;
 bool naptStarted = false;
 
@@ -45,13 +46,23 @@ String piUrl(const char* path) {
   return String("http://") + PI_HOST + ":" + String(PI_PORT) + path;
 }
 
+String wifiStatusText(wl_status_t status) {
+  switch (status) {
+    case WL_CONNECTED: return "connected";
+    case WL_IDLE_STATUS: return "idle";
+    case WL_NO_SSID_AVAIL: return "ssid_not_found";
+    case WL_CONNECT_FAILED: return "connect_failed";
+    case WL_DISCONNECTED: return "disconnected";
+    default: return "unknown";
+  }
+}
+
 void handleMenu() {
   server.sendHeader("Location", piUrl("/"), true);
   server.send(302, "text/plain", "Opening Cotton Flat Bar Quiz...");
 }
 
 void handlePortalProbe() {
-  // Captive Portal Hijack: Send back HTML that forces mobile devices to open their network modal
   String html;
   html.reserve(1800);
   html += "<!doctype html><html><head>";
@@ -66,15 +77,7 @@ void handlePortalProbe() {
 }
 
 void handleStatus() {
-  String staState;
-  switch (WiFi.status()) {
-    case WL_CONNECTED: staState = "connected"; break;
-    case WL_IDLE_STATUS: staState = "idle"; break;
-    case WL_NO_SSID_AVAIL: staState = "ssid_not_found"; break;
-    case WL_CONNECT_FAILED: staState = "connect_failed"; break;
-    case WL_DISCONNECTED: staState = "disconnected"; break;
-    default: staState = "unknown"; break;
-  }
+  String staState = wifiStatusText(WiFi.status());
 
   String json = "{";
   json += "\"ap_ssid\":\"" + String(AP_SSID) + "\",";
@@ -86,29 +89,54 @@ void handleStatus() {
   json += "\"upstream_ip\":\"" + WiFi.localIP().toString() + "\",";
   json += "\"nat_active\":" + String(naptStarted ? "true" : "false");
   json += "}";
+
   server.send(200, "application/json", json);
 }
 
 void startNat() {
-  if (naptStarted) return;
+  if (naptStarted || WiFi.status() != WL_CONNECTED) {
+    return;
+  }
+
+  // Enable NAT only after the ESP32 has an upstream internet connection.
   ip_napt_enable(AP_IP, 1);
+
+  // Make sure the AP can still resolve DNS while NAT is active.
   dns_setserver(0, dns_getserver(0));
+
   naptStarted = true;
   Serial.print("NAT routing enabled: Cotton Flat Bar Quiz -> ");
   Serial.print(WiFi.SSID());
   Serial.println(" -> Internet.");
 }
 
+void stopNat() {
+  if (!naptStarted) {
+    return;
+  }
+
+  ip_napt_enable(AP_IP, 0);
+  naptStarted = false;
+  Serial.println("NAT routing disabled.");
+}
+
 // Captive Portal Interceptor
 bool captivePortalFilter() {
   String host = server.hostHeader();
-  // If the request isn't targeted specifically at the ESP32 IP or the Raspberry Pi host IP,
-  // it means a phone is running a background operating system internet check. Intercept it!
-  if (host != WiFi.softAPIP().toString() && host != String(PI_HOST)) {
-    handlePortalProbe();
-    return true;
+  host.toLowerCase();
+
+  // Allow access to the ESP32 AP and the Raspberry Pi.
+  if (host == WiFi.softAPIP().toString() || host == String(PI_HOST)) {
+    return false;
   }
-  return false;
+
+  // Also allow direct local access to the Pi host if requested by IP.
+  if (host == String(PI_HOST) || host == "localhost") {
+    return false;
+  }
+
+  // Everything else looks like an OS background check or a captive portal probe.
+  return true;
 }
 
 void setup() {
@@ -117,11 +145,13 @@ void setup() {
   Serial.println("\nCotton Flat Bar Quiz portal starting...");
 
   WiFi.mode(WIFI_AP_STA);
+  WiFi.setSleep(false);
 
   if (!WiFi.softAPConfig(AP_IP, AP_GATEWAY, AP_SUBNET)) {
     Serial.println("Warning: could not configure AP address.");
   }
-  if (!WiFi.softAP(AP_SSID)) {
+
+  if (!WiFi.softAP(AP_SSID, AP_PASSWORD, 1, false, 8)) {
     Serial.println("ERROR: Could not start Wi-Fi access point.");
   }
 
@@ -130,14 +160,20 @@ void setup() {
     Serial.print("Registered upstream network: ");
     Serial.println(UPSTREAM_NETWORKS[i].ssid);
   }
-  
+
+  // Try to join the strongest known Wi-Fi immediately.
   wifiMulti.run();
 
   dnsServer.start(DNS_PORT, "*", AP_IP);
-  
+
   server.on("/", HTTP_GET, []() {
-    if (!captivePortalFilter()) handleMenu();
+    if (!captivePortalFilter()) {
+      handleMenu();
+    } else {
+      handlePortalProbe();
+    }
   });
+
   server.on("/esp32-status", HTTP_GET, handleStatus);
 
   // Catch-all OS probe endpoints to force portal popups
@@ -147,11 +183,15 @@ void setup() {
   server.on("/library/test/success.html", HTTP_GET, handlePortalProbe);
   server.on("/ncsi.txt", HTTP_GET, handlePortalProbe);
   server.on("/connecttest.txt", HTTP_GET, handlePortalProbe);
-  
+
   server.onNotFound([]() {
-    if (!captivePortalFilter()) handlePortalProbe();
+    if (!captivePortalFilter()) {
+      handleMenu();
+    } else {
+      handlePortalProbe();
+    }
   });
-  
+
   server.begin();
   Serial.println("Portal Engine active.");
 }
@@ -166,12 +206,11 @@ void loop() {
     lastWifiCheck = nowMs;
 
     if (WiFi.status() == WL_CONNECTED) {
-      if (!naptStarted) {
-        startNat();
-      }
+      startNat();
     } else {
-      naptStarted = false;
-      // Protect active phone players: Only scan if no clients are presently active on the quiz
+      stopNat();
+
+      // Protect active phone players: only scan if no clients are on the quiz AP.
       if (WiFi.softAPgetStationNum() == 0) {
         if (wifiMulti.run() == WL_CONNECTED) {
           startNat();
