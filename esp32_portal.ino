@@ -7,6 +7,10 @@
 
 // Cotton Flat Bar Quiz ESP32 captive portal + Wi-Fi NAT router.
 // ---------- EDIT BEFORE FLASHING ----------
+// IMPORTANT: Classic ESP32 supports only 2.4 GHz Wi-Fi. SSIDs labelled "5G"
+// are often 5 GHz-only and will not connect on this hardware.
+// Security note: the credentials in this file should be treated as compromised.
+// Rotate these Wi-Fi passwords and supply local values before flashing.
 struct UpstreamNetwork {
   const char* ssid;
   const char* password;
@@ -32,10 +36,17 @@ IPAddress AP_IP(192, 168, 4, 1);
 IPAddress AP_GATEWAY(192, 168, 4, 1);
 IPAddress AP_SUBNET(255, 255, 255, 0);
 
-// Wi-Fi Check Interval: Check upstream status every 5 seconds.
-const unsigned long WIFI_CHECK_INTERVAL_MS = 5000; 
-unsigned long lastWifiCheck = 0;
+const unsigned long WIFI_STATUS_POLL_INTERVAL_MS = 1000;
+const unsigned long WIFI_RETRY_MIN_MS = 3000;
+const unsigned long WIFI_RETRY_MAX_MS = 60000;
+const uint8_t WIFI_STALE_RESET_RETRY_COUNT = 5;
+
+unsigned long lastWifiPollMs = 0;
+unsigned long nextWifiRetryMs = 0;
+uint8_t wifiRetryCount = 0;
 bool naptStarted = false;
+uint8_t lastDisconnectReason = 0;
+String lastDisconnectReasonText = "none";
 
 WiFiMulti wifiMulti;
 DNSServer dnsServer;
@@ -77,6 +88,11 @@ void handleStatus() {
   }
 
   String json = "{";
+  bool upstreamHasIp = (WiFi.status() == WL_CONNECTED) &&
+                       (WiFi.localIP() != IPAddress(0, 0, 0, 0));
+  unsigned long nowMs = millis();
+  unsigned long retryInMs = (nextWifiRetryMs > nowMs) ? (nextWifiRetryMs - nowMs) : 0;
+
   json += "\"ap_ssid\":\"" + String(AP_SSID) + "\",";
   json += "\"portal_ip\":\"" + WiFi.softAPIP().toString() + "\",";
   json += "\"pi_url\":\"" + piUrl("/") + "\",";
@@ -84,19 +100,150 @@ void handleStatus() {
   json += "\"upstream_ssid\":\"" + WiFi.SSID() + "\",";
   json += "\"upstream_status\":\"" + staState + "\",";
   json += "\"upstream_ip\":\"" + WiFi.localIP().toString() + "\",";
-  json += "\"nat_active\":" + String(naptStarted ? "true" : "false");
+  json += "\"upstream_gateway\":\"" + WiFi.gatewayIP().toString() + "\",";
+  json += "\"upstream_dns0\":\"" + WiFi.dnsIP(0).toString() + "\",";
+  json += "\"upstream_dns1\":\"" + WiFi.dnsIP(1).toString() + "\",";
+  json += "\"upstream_has_ip\":" + String(upstreamHasIp ? "true" : "false") + ",";
+  json += "\"nat_active\":" + String(naptStarted ? "true" : "false") + ",";
+  json += "\"last_disconnect_reason\":\"" + lastDisconnectReasonText + "\",";
+  json += "\"last_disconnect_code\":" + String(lastDisconnectReason) + ",";
+  json += "\"retry_in_ms\":" + String(retryInMs) + ",";
+  json += "\"retry_count\":" + String(wifiRetryCount);
   json += "}";
   server.send(200, "application/json", json);
 }
 
-void startNat() {
-  if (naptStarted) return;
+bool hasValidUpstreamIp() {
+  return (WiFi.status() == WL_CONNECTED) &&
+         (WiFi.localIP() != IPAddress(0, 0, 0, 0)) &&
+         (WiFi.gatewayIP() != IPAddress(0, 0, 0, 0));
+}
+
+const char* disconnectReasonToText(uint8_t reason) {
+  switch (reason) {
+    case 1: return "unspecified";
+    case 2: return "auth_expired";
+    case 4: return "assoc_expired";
+    case 8: return "assoc_leave";
+    case 15: return "4way_handshake_timeout";
+    case 201: return "no_ap_found";
+    case 202: return "auth_fail";
+    case 203: return "assoc_fail";
+    case 204: return "handshake_timeout";
+    default: return "other";
+  }
+}
+
+void configureUpstreamDns() {
+  IPAddress dns0 = WiFi.dnsIP(0);
+  if (dns0 == IPAddress(0, 0, 0, 0)) {
+    return;
+  }
+
+  ip_addr_t dnsAddr0;
+  ip_addr_t dnsAddr1;
+  dnsAddr0.type = IPADDR_TYPE_V4;
+  dnsAddr1.type = IPADDR_TYPE_V4;
+  dnsAddr0.u_addr.ip4.addr = ipaddr_addr(dns0.toString().c_str());
+  dnsAddr1.u_addr.ip4.addr = ipaddr_addr(WiFi.dnsIP(1).toString().c_str());
+  dns_setserver(0, &dnsAddr0);
+  dns_setserver(1, &dnsAddr1);
+}
+
+void clearUpstreamDns() {
+  ip_addr_t emptyDns;
+  emptyDns.type = IPADDR_TYPE_V4;
+  emptyDns.u_addr.ip4.addr = ipaddr_addr("0.0.0.0");
+  dns_setserver(0, &emptyDns);
+  dns_setserver(1, &emptyDns);
+}
+
+void startNatIfReady() {
+  if (naptStarted || !hasValidUpstreamIp()) return;
   ip_napt_enable(AP_IP, 1);
-  dns_setserver(0, dns_getserver(0));
   naptStarted = true;
   Serial.print("NAT routing enabled: Cotton Flat Bar Quiz -> ");
   Serial.print(WiFi.SSID());
   Serial.println(" -> Internet.");
+}
+
+void stopNat() {
+  if (!naptStarted) return;
+  ip_napt_enable(AP_IP, 0);
+  naptStarted = false;
+  Serial.println("NAT routing disabled until upstream reconnects.");
+}
+
+void scheduleNextRetry() {
+  unsigned long backoffMs = WIFI_RETRY_MIN_MS;
+  if (wifiRetryCount > 0) {
+    uint8_t exponent = wifiRetryCount > 4 ? 4 : wifiRetryCount;
+    backoffMs <<= exponent;
+  }
+  if (backoffMs > WIFI_RETRY_MAX_MS) {
+    backoffMs = WIFI_RETRY_MAX_MS;
+  }
+  nextWifiRetryMs = millis() + backoffMs;
+  wifiRetryCount++;
+}
+
+void onWiFiEvent(WiFiEvent_t event, WiFiEventInfo_t info) {
+  if (event == ARDUINO_EVENT_WIFI_STA_DISCONNECTED) {
+    lastDisconnectReason = info.wifi_sta_disconnected.reason;
+    lastDisconnectReasonText = disconnectReasonToText(lastDisconnectReason);
+    stopNat();
+    clearUpstreamDns();
+    if (nextWifiRetryMs == 0) {
+      scheduleNextRetry();
+    }
+    Serial.print("Upstream disconnected. reason=");
+    Serial.print(lastDisconnectReasonText);
+    Serial.print(" (");
+    Serial.print(lastDisconnectReason);
+    Serial.println(")");
+  } else if (event == ARDUINO_EVENT_WIFI_STA_GOT_IP) {
+    wifiRetryCount = 0;
+    nextWifiRetryMs = 0;
+    configureUpstreamDns();
+    Serial.print("Upstream connected: ");
+    Serial.print(WiFi.SSID());
+    Serial.print(" ");
+    Serial.println(WiFi.localIP());
+  }
+}
+
+void attemptUpstreamReconnect() {
+  if (hasValidUpstreamIp()) {
+    wifiRetryCount = 0;
+    nextWifiRetryMs = 0;
+    configureUpstreamDns();
+    startNatIfReady();
+    return;
+  }
+
+  unsigned long nowMs = millis();
+  if (nextWifiRetryMs == 0) {
+    scheduleNextRetry();
+  }
+  if (nowMs < nextWifiRetryMs) {
+    return;
+  }
+
+  if (wifiRetryCount >= WIFI_STALE_RESET_RETRY_COUNT) {
+    // Clear stale STA state after repeated failures, but keep AP/portal running.
+    WiFi.disconnect(false, true);
+  }
+
+  wl_status_t state = wifiMulti.run(750);
+  if (state == WL_CONNECTED && hasValidUpstreamIp()) {
+    wifiRetryCount = 0;
+    nextWifiRetryMs = 0;
+    configureUpstreamDns();
+    startNatIfReady();
+    return;
+  }
+
+  scheduleNextRetry();
 }
 
 // Captive Portal Interceptor
@@ -117,6 +264,8 @@ void setup() {
   Serial.println("\nCotton Flat Bar Quiz portal starting...");
 
   WiFi.mode(WIFI_AP_STA);
+  WiFi.setSleep(false);
+  WiFi.onEvent(onWiFiEvent);
 
   if (!WiFi.softAPConfig(AP_IP, AP_GATEWAY, AP_SUBNET)) {
     Serial.println("Warning: could not configure AP address.");
@@ -129,9 +278,13 @@ void setup() {
     wifiMulti.addAP(UPSTREAM_NETWORKS[i].ssid, UPSTREAM_NETWORKS[i].password);
     Serial.print("Registered upstream network: ");
     Serial.println(UPSTREAM_NETWORKS[i].ssid);
+    if (String(UPSTREAM_NETWORKS[i].ssid).indexOf("5G") >= 0) {
+      Serial.println("  note: SSID name contains '5G'; classic ESP32 cannot join 5 GHz-only APs.");
+    }
   }
-  
-  wifiMulti.run();
+
+  scheduleNextRetry();
+  attemptUpstreamReconnect();
 
   dnsServer.start(DNS_PORT, "*", AP_IP);
   
@@ -162,21 +315,11 @@ void loop() {
 
   unsigned long nowMs = millis();
 
-  if (nowMs - lastWifiCheck >= WIFI_CHECK_INTERVAL_MS) {
-    lastWifiCheck = nowMs;
-
-    if (WiFi.status() == WL_CONNECTED) {
-      if (!naptStarted) {
-        startNat();
-      }
-    } else {
-      naptStarted = false;
-      // Protect active phone players: Only scan if no clients are presently active on the quiz
-      if (WiFi.softAPgetStationNum() == 0) {
-        if (wifiMulti.run() == WL_CONNECTED) {
-          startNat();
-        }
-      }
+  if (nowMs - lastWifiPollMs >= WIFI_STATUS_POLL_INTERVAL_MS) {
+    lastWifiPollMs = nowMs;
+    if (!hasValidUpstreamIp()) {
+      stopNat();
     }
+    attemptUpstreamReconnect();
   }
 }
