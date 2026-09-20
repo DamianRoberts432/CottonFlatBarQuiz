@@ -16,6 +16,7 @@ UpstreamNetwork UPSTREAM_NETWORKS[] = {
   // Cotton Flat (bar)
   { "suddenlink.net-3680-5G", "251159005545" },
   // Work
+  { "WTRG_2GEXT",            "wtrg070101" },
   { "WTRG18-5G-1",            "wtrg070101" },
   // Home
   { "ATTEI7xz4u",              "t8cvkr6x4x+k" },
