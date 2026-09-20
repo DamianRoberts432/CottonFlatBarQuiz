@@ -8,8 +8,9 @@
 // Cotton Flat Bar Quiz ESP32 captive portal + Wi-Fi NAT router.
 //
 // The ESP32 does two jobs at once:
-//   1. STATION: joins whichever upstream Wi-Fi is available (tries
-//      "Arris-E491" first, falls back to "ATTEI7xz4u") for internet access.
+//   1. STATION: joins whichever upstream Wi-Fi is available (tries every
+//      network in UPSTREAM_NETWORKS, strongest signal wins) for internet
+//      access. This covers all three locations: Cotton Flat, work, and home.
 //   2. ACCESS POINT: broadcasts the open "Cotton Flat Bar Quiz" network for
 //      the Raspberry Pi and patrons.
 //
@@ -18,14 +19,14 @@
 // the Raspberry Pi -- gets real internet access (for `git pull`, etc.) while
 // still being on the same local network as patrons for the quiz itself.
 //
-// This lets you power on the ESP32 + Pi at either location (home, wherever
-// ATTEI7xz4u is in range, etc.) and have it "just work" using whichever
-// upstream network is reachable.
+// This lets you power on the ESP32 + Pi at any of the three locations and
+// have it "just work" using whichever upstream network is reachable, with no
+// manual reconfiguration required.
 //
 // The USB cable to the Pi is power/serial only and is NOT used for
 // networking; all traffic moves over Wi-Fi.
 //
-// IMPORTANT: Fill in both passwords below before flashing.
+// IMPORTANT: Fill in all passwords below before flashing.
 
 // ---------- EDIT BEFORE FLASHING ----------
 struct UpstreamNetwork {
@@ -34,8 +35,12 @@ struct UpstreamNetwork {
 };
 
 UpstreamNetwork UPSTREAM_NETWORKS[] = {
-  { "suddenlink.net-3680-5G",  "251159005545" },
-  { "ATTEI7xz4u",  "t8cvkr6x4x+k" },
+  // Cotton Flat (bar)
+  { "suddenlink.net-3680-5G", "251159005545" },
+  // Work
+  { "WTRG18-5G-1",            "wtrg070101" },
+  // Home
+  { "ATTEI7xz4u",              "t8cvkr6x4x+k" },
 };
 const size_t UPSTREAM_NETWORK_COUNT = sizeof(UPSTREAM_NETWORKS) / sizeof(UPSTREAM_NETWORKS[0]);
 // -------------------------------------------
@@ -63,7 +68,7 @@ String piUrl(const char* path) {
 
 const char MENU_STYLE[] PROGMEM = R"rawliteral(
 <style>
-*{box-sizing:border-box}body{margin:0;min-height:100vh;padding:20px;display:flex;align-items:center;justify-content:center;font-family:Arial,sans-serif;color:#f4f7ff;background:#0f1115}.card{width:100%;max-width:420px;background:#181b22;border-radius:16px;padding:28px;text-align:center;box-shadow:0 10px 30px rgba(0,0,0,.4)}h1{margin:0 0 6px;font-size:1.6rem}.subtitle{color:#9aa4b2;margin:0 0 20px}.button{display:block;text-decoration:none;color:#0f1115;background:#f4f7ff;padding:14px 18px;border-radius:12px;font-weight:700;margin:10px 0}.button.quiz{background:#4ade80}.button.answers{background:#60a5fa}.button.submit{background:#fbbf24}.button.admin{background:#94a3b8}.footer{margin-top:18px;color:#6b7280;font-size:.85rem}
+*{box-sizing:border-box}body{margin:0;min-height:100vh;padding:20px;display:flex;align-items:center;justify-content:center;font-family:Arial,sans-serif;color:#f4f7ff;background:#0f1115}.card{width:min(420px,100%);background:#1a1d24;border-radius:16px;padding:28px;text-align:center;box-shadow:0 10px 30px rgba(0,0,0,.4)}h1{margin-top:0}.button{display:block;margin:14px 0;padding:14px;border-radius:10px;color:#fff;text-decoration:none;font-weight:bold}.quiz{background:#2e7d32}.answers{background:#1565c0}.submit{background:#8e24aa}.admin{background:#455a64}.subtitle{opacity:.8}.footer{opacity:.6;font-size:.85em;margin-top:10px}
 </style>
 )rawliteral";
 
@@ -150,8 +155,9 @@ void setup() {
     Serial.println("ERROR: Could not start Wi-Fi access point.");
   }
 
-  // Register every known upstream network. WiFiMulti automatically connects
-  // to whichever one has the strongest signal / is available.
+  // Register every known upstream network (Cotton Flat, work, home).
+  // WiFiMulti automatically connects to whichever one has the strongest
+  // signal / is available, so this works unattended at any location.
   for (size_t i = 0; i < UPSTREAM_NETWORK_COUNT; i++) {
     wifiMulti.addAP(UPSTREAM_NETWORKS[i].ssid, UPSTREAM_NETWORKS[i].password);
     Serial.print("Registered upstream network: ");
