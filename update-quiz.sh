@@ -11,6 +11,42 @@ log() {
     echo "$(date '+%Y-%m-%d %H:%M:%S') $1" | tee -a "$LOG_FILE"
 }
 
+# The ESP32 access point ("Cotton Flat Bar Quiz") answers every DNS query
+# with its own address (captive portal behavior). That breaks Raspberry Pi
+# Connect and any other service that needs real DNS resolution once the Pi
+# joins that network. Force the NetworkManager profile for that SSID to use
+# public DNS servers directly instead of the ESP32's hijacked DNS, so real
+# internet name resolution keeps working over the ESP32's NAT routing.
+fix_ap_dns() {
+    if ! command -v nmcli >/dev/null 2>&1; then
+        return 0
+    fi
+
+    if ! nmcli -t -f NAME connection show | grep -Fxq "Cotton Flat Bar Quiz"; then
+        log "update-quiz: no Cotton Flat Bar Quiz connection profile found yet; skipping DNS fix"
+        return 0
+    fi
+
+    if nmcli connection modify "Cotton Flat Bar Quiz" \
+        ipv4.ignore-auto-dns yes \
+        ipv4.dns "8.8.8.8 1.1.1.1" >>"$LOG_FILE" 2>&1; then
+        log "update-quiz: set public DNS (8.8.8.8, 1.1.1.1) on Cotton Flat Bar Quiz profile so Raspberry Pi Connect keeps working"
+    else
+        log "update-quiz: failed to update DNS settings on Cotton Flat Bar Quiz profile"
+    fi
+
+    IFACE="$(nmcli -t -f DEVICE,TYPE device | awk -F: '$2=="wifi"{print $1; exit}')"
+    if [ -n "$IFACE" ]; then
+        ACTIVE_CONN="$(nmcli -g GENERAL.CONNECTION device show "$IFACE" 2>/dev/null)"
+        if [ "$ACTIVE_CONN" = "Cotton Flat Bar Quiz" ]; then
+            log "update-quiz: reapplying Cotton Flat Bar Quiz connection to pick up new DNS settings"
+            nmcli connection up "Cotton Flat Bar Quiz" >>"$LOG_FILE" 2>&1 || true
+        fi
+    fi
+}
+
+fix_ap_dns
+
 if [ ! -d .git ]; then
     log "update-quiz: $REPO_DIR is not a git repository; skipping update"
     exit 0
