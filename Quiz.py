@@ -79,7 +79,6 @@ OPEN_QUESTION_TEMPLATES = [
 ]
 
 OPEN_SUFFIXES = [
-    " Explain your theory like a sociologist who has had one drink.",
     " Give the room a field-note-quality example.",
     " Bonus points for naming the unwritten rule involved.",
     " Defend your answer as if you are testifying before the Committee on Vibes.",
