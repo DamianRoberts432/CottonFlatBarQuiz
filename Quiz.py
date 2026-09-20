@@ -264,7 +264,7 @@ def options_for(question):
 def form_values(source):
     text = clean_question_text(source.get("text", "").strip())
     is_open = source.get("question_type", "open") == "open"
-    options = [clean_question_text(source.get(f"op{i}", "").strip()) for i in range(1, 5)]
+    options = [strip_internal_round_labels(source.get(f"op{i}", "").strip()) for i in range(1, 5)]
     return text, 1 if is_open else 0, options
 
 
