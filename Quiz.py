@@ -43,7 +43,7 @@ REPETITIVE_PROMPT_PATTERNS = [
     r"keep\s+it\s+honest,\s*specific,\s*and\s+just\s+a\s+little\s+incriminating",
 ]
 REPETITIVE_PROMPT_RE = re.compile(
-    r"^(?P<base>.*?[.?!][\"')\]]?)(?:\s+|[\s:;—-]+)(?:"
+    r"^(?P<base>.*?\S)(?:\s+|[\s:;—-]+)(?:"
     + "|".join(REPETITIVE_PROMPT_PATTERNS)
     + r")(?:\s*[.!?])*\s*$",
     flags=re.IGNORECASE,
@@ -59,9 +59,10 @@ def strip_repetitive_prompt_suffix(text):
         if updated == cleaned:
             break
         cleaned = updated.strip()
-    cleaned = re.sub(r"\s+([,.;:?!])", r"\1", cleaned)
-    cleaned = re.sub(r"\s{2,}", " ", cleaned)
-    return cleaned.strip()
+    cleaned = " ".join(cleaned.split())
+    for punctuation in ",.;:?!":
+        cleaned = cleaned.replace(f" {punctuation}", punctuation)
+    return cleaned
 
 
 def clean_question_text(text):
