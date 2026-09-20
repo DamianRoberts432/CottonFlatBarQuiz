@@ -10,7 +10,7 @@ User=d
 WorkingDirectory=/home/d/CottonFlatBarQuiz
 ExecStart=/usr/bin/env bash -lc 'cd /home/d/CottonFlatBarQuiz && bash ./update-quiz.sh || true'
 RemainAfterExit=yes
-TimeoutStartSec=240
+TimeoutStartSec=180
 
 [Install]
 WantedBy=multi-user.target
