@@ -39,14 +39,19 @@ IPAddress AP_SUBNET(255, 255, 255, 0);
 const unsigned long WIFI_STATUS_POLL_INTERVAL_MS = 1000;
 const unsigned long WIFI_RETRY_MIN_MS = 3000;
 const unsigned long WIFI_RETRY_MAX_MS = 60000;
+const unsigned long WIFI_CONNECT_TIMEOUT_MS = 1500;
 const uint8_t WIFI_STALE_RESET_RETRY_COUNT = 5;
+const uint8_t WIFI_STA_DNS_SLOTS = 2;
 
 unsigned long lastWifiPollMs = 0;
 unsigned long nextWifiRetryMs = 0;
+bool wifiRetryScheduled = false;
 uint8_t wifiRetryCount = 0;
 bool naptStarted = false;
-uint8_t lastDisconnectReason = 0;
-String lastDisconnectReasonText = "none";
+uint8_t lastDisconnectReason = 255;
+String lastDisconnectReasonText = "unavailable";
+bool staleResetApplied = false;
+wl_status_t lastStaStatus = WL_DISCONNECTED;
 
 WiFiMulti wifiMulti;
 DNSServer dnsServer;
@@ -91,7 +96,14 @@ void handleStatus() {
   bool upstreamHasIp = (WiFi.status() == WL_CONNECTED) &&
                        (WiFi.localIP() != IPAddress(0, 0, 0, 0));
   unsigned long nowMs = millis();
-  unsigned long retryInMs = (nextWifiRetryMs > nowMs) ? (nextWifiRetryMs - nowMs) : 0;
+  unsigned long retryInMs = 0;
+  if (wifiRetryScheduled) {
+    unsigned long elapsedSinceRetryPoint = nowMs - nextWifiRetryMs;
+    if (elapsedSinceRetryPoint >= 0x80000000UL) {
+      unsigned long remainingMs = nextWifiRetryMs - nowMs;
+      retryInMs = remainingMs;
+    }
+  }
 
   json += "\"ap_ssid\":\"" + String(AP_SSID) + "\",";
   json += "\"portal_ip\":\"" + WiFi.softAPIP().toString() + "\",";
@@ -130,32 +142,31 @@ const char* disconnectReasonToText(uint8_t reason) {
     case 202: return "auth_fail";
     case 203: return "assoc_fail";
     case 204: return "handshake_timeout";
+    case 255: return "unavailable";
     default: return "other";
   }
 }
 
-void configureUpstreamDns() {
-  IPAddress dns0 = WiFi.dnsIP(0);
-  if (dns0 == IPAddress(0, 0, 0, 0)) {
-    return;
+void setDnsSlot(uint8_t slot, IPAddress dns) {
+  ip_addr_t dnsAddr;
+  if (dns == IPAddress(0, 0, 0, 0)) {
+    IP_ADDR4(&dnsAddr, 0, 0, 0, 0);
+  } else {
+    IP_ADDR4(&dnsAddr, dns[0], dns[1], dns[2], dns[3]);
   }
+  dns_setserver(slot, &dnsAddr);
+}
 
-  ip_addr_t dnsAddr0;
-  ip_addr_t dnsAddr1;
-  dnsAddr0.type = IPADDR_TYPE_V4;
-  dnsAddr1.type = IPADDR_TYPE_V4;
-  dnsAddr0.u_addr.ip4.addr = ipaddr_addr(dns0.toString().c_str());
-  dnsAddr1.u_addr.ip4.addr = ipaddr_addr(WiFi.dnsIP(1).toString().c_str());
-  dns_setserver(0, &dnsAddr0);
-  dns_setserver(1, &dnsAddr1);
+void configureUpstreamDns() {
+  for (uint8_t i = 0; i < WIFI_STA_DNS_SLOTS; i++) {
+    setDnsSlot(i, WiFi.dnsIP(i));
+  }
 }
 
 void clearUpstreamDns() {
-  ip_addr_t emptyDns;
-  emptyDns.type = IPADDR_TYPE_V4;
-  emptyDns.u_addr.ip4.addr = ipaddr_addr("0.0.0.0");
-  dns_setserver(0, &emptyDns);
-  dns_setserver(1, &emptyDns);
+  for (uint8_t i = 0; i < WIFI_STA_DNS_SLOTS; i++) {
+    setDnsSlot(i, IPAddress(0, 0, 0, 0));
+  }
 }
 
 void startNatIfReady() {
@@ -184,27 +195,16 @@ void scheduleNextRetry() {
     backoffMs = WIFI_RETRY_MAX_MS;
   }
   nextWifiRetryMs = millis() + backoffMs;
-  wifiRetryCount++;
+  wifiRetryScheduled = true;
 }
 
-void onWiFiEvent(WiFiEvent_t event, WiFiEventInfo_t info) {
-  if (event == ARDUINO_EVENT_WIFI_STA_DISCONNECTED) {
-    lastDisconnectReason = info.wifi_sta_disconnected.reason;
-    lastDisconnectReasonText = disconnectReasonToText(lastDisconnectReason);
-    stopNat();
-    clearUpstreamDns();
-    if (nextWifiRetryMs == 0) {
-      scheduleNextRetry();
-    }
-    Serial.print("Upstream disconnected. reason=");
-    Serial.print(lastDisconnectReasonText);
-    Serial.print(" (");
-    Serial.print(lastDisconnectReason);
-    Serial.println(")");
-  } else if (event == ARDUINO_EVENT_WIFI_STA_GOT_IP) {
-    wifiRetryCount = 0;
-    nextWifiRetryMs = 0;
-    configureUpstreamDns();
+void markUpstreamConnected(bool logConnect) {
+  wifiRetryCount = 0;
+  wifiRetryScheduled = false;
+  staleResetApplied = false;
+  configureUpstreamDns();
+  startNatIfReady();
+  if (logConnect) {
     Serial.print("Upstream connected: ");
     Serial.print(WiFi.SSID());
     Serial.print(" ");
@@ -212,37 +212,80 @@ void onWiFiEvent(WiFiEvent_t event, WiFiEventInfo_t info) {
   }
 }
 
+void handleStaStatusTransitions() {
+  wl_status_t staStatus = WiFi.status();
+  if (staStatus == WL_CONNECTED && hasValidUpstreamIp() && wifiRetryScheduled) {
+    markUpstreamConnected(false);
+  }
+  if (staStatus == lastStaStatus) {
+    return;
+  }
+  lastStaStatus = staStatus;
+
+  if (staStatus == WL_CONNECTED && hasValidUpstreamIp()) {
+    markUpstreamConnected(true);
+    return;
+  }
+  if (staStatus == WL_CONNECTED) {
+    // Connected state may appear briefly before DHCP/gateway data is available.
+    stopNat();
+    clearUpstreamDns();
+    if (!wifiRetryScheduled) {
+      scheduleNextRetry();
+    }
+    return;
+  }
+
+  staleResetApplied = false;
+  stopNat();
+  clearUpstreamDns();
+  if (!wifiRetryScheduled) {
+    scheduleNextRetry();
+  }
+  Serial.println("Upstream disconnected.");
+}
+
 void attemptUpstreamReconnect() {
   if (hasValidUpstreamIp()) {
-    wifiRetryCount = 0;
-    nextWifiRetryMs = 0;
-    configureUpstreamDns();
-    startNatIfReady();
+    markUpstreamConnected(false);
     return;
   }
 
   unsigned long nowMs = millis();
-  if (nextWifiRetryMs == 0) {
+  if (!wifiRetryScheduled) {
+    nextWifiRetryMs = millis();
+    wifiRetryScheduled = true;
+  }
+  if ((long)(nowMs - nextWifiRetryMs) < 0) {
+    return;
+  }
+
+  uint8_t apClients = WiFi.softAPgetStationNum();
+  if (apClients > 0 && wifiRetryCount >= WIFI_STALE_RESET_RETRY_COUNT) {
+    // Defer heavier stale-state reset while AP clients are active.
     scheduleNextRetry();
-  }
-  if (nowMs < nextWifiRetryMs) {
     return;
   }
 
-  if (wifiRetryCount >= WIFI_STALE_RESET_RETRY_COUNT) {
-    // Clear stale STA state after repeated failures, but keep AP/portal running.
-    WiFi.disconnect(false, true);
-  }
-
-  wl_status_t state = wifiMulti.run(750);
-  if (state == WL_CONNECTED && hasValidUpstreamIp()) {
+  if (wifiRetryCount >= WIFI_STALE_RESET_RETRY_COUNT && !staleResetApplied) {
+    // Reset STA state without leaving AP+STA mode or erasing credentials.
+    WiFi.disconnect(false, false);
+    WiFi.reconnect();
     wifiRetryCount = 0;
-    nextWifiRetryMs = 0;
-    configureUpstreamDns();
-    startNatIfReady();
+    staleResetApplied = true;
+    scheduleNextRetry();
     return;
   }
 
+  wl_status_t state = wifiMulti.run(WIFI_CONNECT_TIMEOUT_MS);
+  if (state == WL_CONNECTED && hasValidUpstreamIp()) {
+    markUpstreamConnected(false);
+    return;
+  }
+
+  if (wifiRetryCount < 255) {
+    wifiRetryCount++;
+  }
   scheduleNextRetry();
 }
 
@@ -265,7 +308,6 @@ void setup() {
 
   WiFi.mode(WIFI_AP_STA);
   WiFi.setSleep(false);
-  WiFi.onEvent(onWiFiEvent);
 
   if (!WiFi.softAPConfig(AP_IP, AP_GATEWAY, AP_SUBNET)) {
     Serial.println("Warning: could not configure AP address.");
@@ -278,12 +320,11 @@ void setup() {
     wifiMulti.addAP(UPSTREAM_NETWORKS[i].ssid, UPSTREAM_NETWORKS[i].password);
     Serial.print("Registered upstream network: ");
     Serial.println(UPSTREAM_NETWORKS[i].ssid);
-    if (String(UPSTREAM_NETWORKS[i].ssid).indexOf("5G") >= 0) {
-      Serial.println("  note: SSID name contains '5G'; classic ESP32 cannot join 5 GHz-only APs.");
-    }
   }
+  Serial.println("Reminder: classic ESP32 STA works only on 2.4 GHz upstream Wi-Fi.");
 
-  scheduleNextRetry();
+  nextWifiRetryMs = millis();
+  wifiRetryScheduled = true;
   attemptUpstreamReconnect();
 
   dnsServer.start(DNS_PORT, "*", AP_IP);
@@ -312,6 +353,7 @@ void setup() {
 void loop() {
   dnsServer.processNextRequest();
   server.handleClient();
+  handleStaStatusTransitions();
 
   unsigned long nowMs = millis();
 
