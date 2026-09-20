@@ -35,6 +35,39 @@ def strip_internal_round_labels(text):
     return cleaned.strip()
 
 
+REPETITIVE_PROMPT_PATTERNS = [
+    r"explain\s+your\s+(?:theory|answer|reasoning)\s+like\s+a\s+sociologist",
+    r"give\s+the\s+room\s+a\s+field[- ]note[- ]quality\s+example",
+    r"bonus\s+points\s+for\s+naming\s+the\s+unwritten\s+rule\s+involved",
+    r"defend\s+your\s+answer\s+as\s+if\s+you(?:'re|\s+are)\s+testifying\s+before\s+the\s+committee\s+on\s+vibes",
+    r"keep\s+it\s+honest,\s*specific,\s*and\s+just\s+a\s+little\s+incriminating",
+]
+REPETITIVE_PROMPT_RE = re.compile(
+    r"^(?P<base>.*?[.?!][\"')\]]?)(?:\s+|[\s:;—-]+)(?:"
+    + "|".join(REPETITIVE_PROMPT_PATTERNS)
+    + r")(?:\s*[.!?])*\s*$",
+    flags=re.IGNORECASE,
+)
+
+
+def strip_repetitive_prompt_suffix(text):
+    if text is None:
+        return ""
+    cleaned = str(text).strip()
+    while cleaned:
+        updated = REPETITIVE_PROMPT_RE.sub(r"\g<base>", cleaned)
+        if updated == cleaned:
+            break
+        cleaned = updated.strip()
+    cleaned = re.sub(r"\s+([,.;:?!])", r"\1", cleaned)
+    cleaned = re.sub(r"\s{2,}", " ", cleaned)
+    return cleaned.strip()
+
+
+def clean_question_text(text):
+    return strip_repetitive_prompt_suffix(strip_internal_round_labels(text))
+
+
 OPEN_QUESTION_TEMPLATES = [
     "What tiny social rule do people pretend is normal even though it makes absolutely no sense?",
     "What is the funniest status symbol someone can own while insisting they do not care about status?",
@@ -76,13 +109,6 @@ OPEN_QUESTION_TEMPLATES = [
     "What is one social skill people wildly overestimate in themselves?",
     "What is the best example of a crowd becoming one shared brain cell?",
     "What is your favorite tiny act of rebellion against an unnecessary social rule?",
-]
-
-OPEN_SUFFIXES = [
-    " Give the room a field-note-quality example.",
-    " Bonus points for naming the unwritten rule involved.",
-    " Defend your answer as if you are testifying before the Committee on Vibes.",
-    " Keep it honest, specific, and just a little incriminating.",
 ]
 
 CHOICE_QUESTIONS = [
@@ -135,8 +161,7 @@ def make_seed_questions():
             questions.append({"seed_key": f"choice-{index + 1}", "text": text, "is_open_text": 0, "options": options})
         else:
             base = OPEN_QUESTION_TEMPLATES[index % len(OPEN_QUESTION_TEMPLATES)]
-            suffix = OPEN_SUFFIXES[(index // len(OPEN_QUESTION_TEMPLATES)) % len(OPEN_SUFFIXES)]
-            questions.append({"seed_key": f"open-{index + 1}", "text": f"{base}{suffix}", "is_open_text": 1, "options": []})
+            questions.append({"seed_key": f"open-{index + 1}", "text": base, "is_open_text": 1, "options": []})
     return questions
 
 
@@ -193,16 +218,16 @@ def init_db():
             conn.execute("""INSERT INTO questions
                 (text, is_open_text, op1, op2, op3, op4, approved, created_at, seed_key)
                 VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)""", (
-                    strip_internal_round_labels(item["text"])[:MAX_QUESTION_LENGTH], item["is_open_text"],
+                    clean_question_text(item["text"])[:MAX_QUESTION_LENGTH], item["is_open_text"],
                     options[0][:MAX_OPTION_LENGTH], options[1][:MAX_OPTION_LENGTH],
                     options[2][:MAX_OPTION_LENGTH], options[3][:MAX_OPTION_LENGTH], now(), item["seed_key"]))
 
     for row in conn.execute("SELECT id, text FROM questions WHERE text IS NOT NULL"):
-        cleaned = strip_internal_round_labels(row["text"])
+        cleaned = clean_question_text(row["text"])
         if cleaned != row["text"]:
             conn.execute("UPDATE questions SET text = ? WHERE id = ?", (cleaned, row["id"]))
     for row in conn.execute("SELECT id, text FROM suggestions WHERE text IS NOT NULL"):
-        cleaned = strip_internal_round_labels(row["text"])
+        cleaned = clean_question_text(row["text"])
         if cleaned != row["text"]:
             conn.execute("UPDATE suggestions SET text = ? WHERE id = ?", (cleaned, row["id"]))
 
@@ -236,7 +261,7 @@ def options_for(question):
 
 
 def form_values(source):
-    text = strip_internal_round_labels(source.get("text", "").strip())
+    text = clean_question_text(source.get("text", "").strip())
     is_open = source.get("question_type", "open") == "open"
     options = [strip_internal_round_labels(source.get(f"op{i}", "").strip()) for i in range(1, 5)]
     return text, 1 if is_open else 0, options
@@ -550,7 +575,7 @@ def approve_suggestion(suggestion_id):
     conn = db_conn()
     suggestion = conn.execute("SELECT * FROM suggestions WHERE id = ?", (suggestion_id,)).fetchone()
     if suggestion:
-        text = strip_internal_round_labels(suggestion["text"])
+        text = clean_question_text(suggestion["text"])
         conn.execute("INSERT INTO questions (text, is_open_text, op1, op2, op3, op4, approved, created_at) VALUES (?, ?, ?, ?, ?, ?, 1, ?)", (text, suggestion["is_open_text"], suggestion["op1"], suggestion["op2"], suggestion["op3"], suggestion["op4"], now()))
         conn.execute("DELETE FROM suggestions WHERE id = ?", (suggestion_id,))
         conn.commit()
