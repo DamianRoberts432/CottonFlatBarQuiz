@@ -1,5 +1,5 @@
 [Unit]
-Description=Update Cotton Flat Bar Quiz from GitHub (via Cotton Flat Bar Quiz portal)
+Description=Update Cotton Flat Bar Quiz from GitHub
 Wants=network-online.target
 After=network-online.target
 Before=cotton-flat-quiz.service
@@ -8,7 +8,7 @@ Before=cotton-flat-quiz.service
 Type=oneshot
 User=d
 WorkingDirectory=/home/d/CottonFlatBarQuiz
-ExecStart=/usr/bin/env bash -lc 'cd /home/d/CottonFlatBarQuiz && bash ./update-quiz.sh || true'
+ExecStart=/usr/bin/env bash /home/d/CottonFlatBarQuiz/update-quiz.sh
 RemainAfterExit=yes
 TimeoutStartSec=180
 

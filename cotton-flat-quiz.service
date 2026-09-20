@@ -1,12 +1,14 @@
 [Unit]
 Description=Cotton Flat Bar Quiz (Quiz.py)
-After=network-online.target
+Requires=cotton-flat-quiz-update.service
+After=network-online.target cotton-flat-quiz-update.service
 Wants=network-online.target
 
 [Service]
 Type=simple
 User=d
 WorkingDirectory=/home/d/CottonFlatBarQuiz
+ExecStartPre=/usr/bin/python3 -m py_compile /home/d/CottonFlatBarQuiz/Quiz.py
 ExecStart=/usr/bin/python3 /home/d/CottonFlatBarQuiz/Quiz.py
 Restart=on-failure
 RestartSec=5
