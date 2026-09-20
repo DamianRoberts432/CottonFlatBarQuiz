@@ -54,8 +54,10 @@ IPAddress AP_IP(192, 168, 4, 1);
 IPAddress AP_GATEWAY(192, 168, 4, 1);
 IPAddress AP_SUBNET(255, 255, 255, 0);
 
-const unsigned long STA_RETRY_INTERVAL_MS = 15000;
-unsigned long lastStaRetry = 0;
+// Wi-Fi Check Interval: Check upstream status every 5 seconds.
+// This prevents background scanning from killing the AP broadcast.
+const unsigned long WIFI_CHECK_INTERVAL_MS = 5000; 
+unsigned long lastWifiCheck = 0;
 bool naptStarted = false;
 
 WiFiMulti wifiMulti;
@@ -117,12 +119,6 @@ void handleStatus() {
   server.send(200, "application/json", json);
 }
 
-void handleNotFound() {
-  // DNS is redirected to this ESP32, so return the portal page for Android,
-  // iOS, Windows, and any other captive-portal detection request.
-  handlePortalProbe();
-}
-
 void startNat() {
   if (naptStarted) return;
   // Enable IP forwarding + NAPT so devices on the "Cotton Flat Bar Quiz" AP
@@ -154,13 +150,13 @@ void setup() {
   }
 
   // Register every known upstream network (Cotton Flat, work, home).
-  // WiFiMulti automatically connects to whichever one has the strongest
-  // signal / is available, so this works unattended at any location.
   for (size_t i = 0; i < UPSTREAM_NETWORK_COUNT; i++) {
     wifiMulti.addAP(UPSTREAM_NETWORKS[i].ssid, UPSTREAM_NETWORKS[i].password);
     Serial.print("Registered upstream network: ");
     Serial.println(UPSTREAM_NETWORKS[i].ssid);
   }
+  
+  // Initial check at startup
   wifiMulti.run();
 
   dnsServer.start(DNS_PORT, "*", AP_IP);
@@ -191,16 +187,28 @@ void loop() {
   dnsServer.processNextRequest();
   server.handleClient();
 
-  if (wifiMulti.run() == WL_CONNECTED) {
-    if (!naptStarted) {
-      startNat();
-    }
-  } else {
-    naptStarted = false;
-    unsigned long nowMs = millis();
-    if (nowMs - lastStaRetry >= STA_RETRY_INTERVAL_MS) {
-      lastStaRetry = nowMs;
-      Serial.println("No upstream network connected, retrying...");
+  unsigned long nowMs = millis();
+
+  // Non-blocking timer: evaluate network status every 5 seconds.
+  // This stops WiFiMulti from forcing continuous radio scans that disconnect clients.
+  if (nowMs - lastWifiCheck >= WIFI_CHECK_INTERVAL_MS) {
+    lastWifiCheck = nowMs;
+
+    if (WiFi.status() == WL_CONNECTED) {
+      if (!naptStarted) {
+        startNat();
+      }
+    } else {
+      // Station disconnected or hasn't found a network yet.
+      naptStarted = false;
+      Serial.println("Upstream Wi-Fi disconnected. Attempting background scan/reconnect...");
+      
+      // Safe to run scanning now because we are already disconnected upstream.
+      if (wifiMulti.run() == WL_CONNECTED) {
+        startNat();
+      } else {
+        Serial.println("Still scanning for an available upstream network...");
+      }
     }
   }
 }
