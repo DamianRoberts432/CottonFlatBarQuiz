@@ -73,25 +73,23 @@ const char MENU_STYLE[] PROGMEM = R"rawliteral(
 )rawliteral";
 
 void handleMenu() {
-  String html;
-  html.reserve(3500);
-  html += "<!doctype html><html><head><meta charset='utf-8'>";
-  html += "<meta name='viewport' content='width=device-width,initial-scale=1'>";
-  html += "<title>Cotton Flat Bar Quiz</title>";
-  html += MENU_STYLE;
-  html += "</head><body><main class='card'>";
-  html += "<h1>Cotton Flat Bar Quiz</h1>";
-  html += "<p class='subtitle'>Choose an option below</p>";
-  html += "<a class='button quiz' href='" + piUrl("/quiz") + "'>Take Quiz</a>";
-  html += "<a class='button answers' href='" + piUrl("/answers") + "'>See Answers</a>";
-  html += "<a class='button submit' href='" + piUrl("/submit-question") + "'>Submit Question</a>";
-  html += "<a class='button admin' href='" + piUrl("/admin") + "'>Admin</a>";
-  html += "<p class='footer'>Connected to Cotton Flat Bar Quiz</p>";
-  html += "</main></body></html>";
+  // Send users directly to the Raspberry Pi quiz home page.
+  server.sendHeader("Location", piUrl("/"), true);
+  server.send(302, "text/plain", "Opening Cotton Flat Bar Quiz...");
+}
 
-  server.sendHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
-  server.sendHeader("Pragma", "no-cache");
-  server.sendHeader("Expires", "0");
+void handlePortalProbe() {
+  // Return a normal portal page for phone/OS connectivity checks, with an
+  // immediate redirect and a manual fallback link if auto-opening is blocked.
+  String html;
+  html.reserve(1800);
+  html += "<!doctype html><html><head>";
+  html += "<meta name='viewport' content='width=device-width,initial-scale=1'>";
+  html += "<meta http-equiv='refresh' content='0;url=" + piUrl("/") + "'>";
+  html += "<title>Cotton Flat Bar Quiz</title></head><body>";
+  html += "<p>Opening Cotton Flat Bar Quiz...</p>";
+  html += "<p><a href='" + piUrl("/") + "'>Tap here if it does not open automatically.</a></p>";
+  html += "</body></html>";
   server.send(200, "text/html", html);
 }
 
@@ -120,9 +118,9 @@ void handleStatus() {
 }
 
 void handleNotFound() {
-  // DNS is redirected to this ESP32, so return the menu for Android, iOS,
-  // Windows, and any other captive-portal detection request.
-  handleMenu();
+  // DNS is redirected to this ESP32, so return the portal page for Android,
+  // iOS, Windows, and any other captive-portal detection request.
+  handlePortalProbe();
 }
 
 void startNat() {
@@ -168,7 +166,15 @@ void setup() {
   dnsServer.start(DNS_PORT, "*", AP_IP);
   server.on("/", HTTP_GET, handleMenu);
   server.on("/esp32-status", HTTP_GET, handleStatus);
-  server.onNotFound(handleNotFound);
+
+  // Common captive-portal probe URLs. Serve the direct-to-quiz portal page.
+  server.on("/generate_204", HTTP_GET, handlePortalProbe);
+  server.on("/gen_204", HTTP_GET, handlePortalProbe);
+  server.on("/hotspot-detect.html", HTTP_GET, handlePortalProbe);
+  server.on("/library/test/success.html", HTTP_GET, handlePortalProbe);
+  server.on("/ncsi.txt", HTTP_GET, handlePortalProbe);
+  server.on("/connecttest.txt", HTTP_GET, handlePortalProbe);
+  server.onNotFound(handlePortalProbe);
   server.begin();
 
   Serial.print("Patron Wi-Fi name: ");
