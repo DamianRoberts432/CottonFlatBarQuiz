@@ -341,7 +341,7 @@ def quiz():
             return page("Quiz Complete", "<h1>Thanks!</h1><p>Your answer was saved.</p><a class='btn btn-ok' href='/answers'>See Answers</a><a class='btn btn-sec' href='/'>Menu</a>")
         return redirect(url_for("quiz", q=index + 1))
 
-    body = f"<p class='muted'>Question {index + 1} of {len(questions)} · PIN {escape(session['participant_pin'])}</p><h1>Take Quiz</h1><div class='question left'><h3>{escape(strip_internal_round_labels(question['text']))}</h3>"
+    body = f"<p class='muted'>Question {index + 1} of {len(questions)} · PIN {escape(session['participant_pin'])}</p><h1>Take Quiz</h1><div class='question left'><h3>{escape(strip_internal_round_labels(question['text']))}</h3><form method='post' action='{escape(url_for('quiz', q=index))}' class='left'>"
     if question["is_open_text"]:
         body += "<input name='author' maxlength='80' placeholder='Your name (optional)'><textarea name='message' maxlength='2000' required placeholder='Type your answer here'></textarea>"
     else:
