@@ -67,8 +67,7 @@ bool checkPiHealth() {
     return false;
   }
 
-  // FIXED: Changed back to uppercase GET() to solve the compilation error
-  int statusCode = http.GET(); 
+  int statusCode = http.GET();
   http.end();
   return statusCode == HTTP_CODE_OK;
 }
@@ -127,12 +126,11 @@ void handleMenu() {
   html += "<p>Connected to the quiz network.</p>";
   html += piHealthIndicator();
 
-  // Switched back to relative navigation so captive network sandboxes don't freeze the action
-  html += "<a class='btn' href='/quiz'>Take Quiz</a>";
-  html += "<a class='btn secondary' href='/answers'>See Answers</a>";
-  html += "<a class='btn secondary' href='/submit-question'>Submit Question</a>";
-  html += "<a class='btn gold' href='/gold-users'>Gold Users</a>"; 
-  html += "<a class='btn admin' href='/admin'>Admin</a>";
+  // Link directly to the Pi instead of using relative captive-portal paths
+  html += "<a class='btn' href='" + piUrl("/quiz") + "'>Take Quiz</a>";
+  html += "<a class='btn secondary' href='" + piUrl("/answers") + "'>See Answers</a>";
+  html += "<a class='btn secondary' href='" + piUrl("/submit-question") + "'>Submit Question</a>";
+  html += "<a class='btn admin' href='" + piUrl("/admin") + "'>Admin</a>";
 
   html += "<p class='muted'>The quiz server is expected at " + PI_IP.toString() + ":" + String(PI_PORT) + ".</p>";
   html += "</main></body></html>";
@@ -212,14 +210,14 @@ void setup() {
   server.on("/esp32-status", HTTP_GET, handleStatus);
 
   // If a phone requests an asset path or attempts to submit an action form,
-  // do NOT trap it inside the captive portal checker loop. Send a blank 404 response so the phone's 
+  // do NOT trap it inside the captive portal checker loop. Send a blank 404 response so the phone's
   // background browser engine automatically drops out of the redirect lane and speaks straight to the Pi.
   server.onNotFound([]() {
     String uri = server.uri();
     HTTPMethod method = server.method();
-    
-    if (method == HTTP_POST || method == HTTP_OPTIONS || 
-        uri.startsWith("/quiz") || uri.startsWith("/answers") || uri.startsWith("/submit-question") || 
+
+    if (method == HTTP_POST || method == HTTP_OPTIONS ||
+        uri.startsWith("/quiz") || uri.startsWith("/answers") || uri.startsWith("/submit-question") ||
         uri.startsWith("/admin") || uri.startsWith("/gold-users") || uri.startsWith("/static")) {
       server.send(404, "text/plain", "Not Found");
       return;
