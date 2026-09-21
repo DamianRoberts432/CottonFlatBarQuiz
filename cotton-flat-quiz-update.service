@@ -11,6 +11,8 @@ WorkingDirectory=/home/d/CottonFlatBarQuiz
 ExecStart=/usr/bin/env bash /home/d/CottonFlatBarQuiz/update-quiz.sh
 RemainAfterExit=yes
 TimeoutStartSec=180
+NoNewPrivileges=yes
+PrivateTmp=yes
 
 [Install]
 WantedBy=multi-user.target
