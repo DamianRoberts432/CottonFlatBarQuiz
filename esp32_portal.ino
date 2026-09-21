@@ -5,6 +5,10 @@
 #include "lwip/lwip_napt.h"
 #include "lwip/dns.h"
 
+// Copy wifi_secrets.example.h to wifi_secrets.h beside this sketch and enter
+// your upstream Wi-Fi credentials there. The local file is gitignored.
+#include "wifi_secrets.h"
+
 // Cotton Flat Bar Quiz ESP32 captive portal.
 //
 // The quiz only needs a stable local access point between phones and the Pi.
@@ -18,9 +22,9 @@ struct UpstreamNetwork {
 };
 
 UpstreamNetwork UPSTREAM_NETWORKS[] = {
-  { "YOUR_BAR_WIFI_SSID",  "YOUR_BAR_WIFI_PASSWORD" },
-  { "YOUR_WORK_WIFI_SSID", "YOUR_WORK_WIFI_PASSWORD" },
-  { "YOUR_HOME_WIFI_SSID", "YOUR_HOME_WIFI_PASSWORD" },
+  { BAR_WIFI_SSID,  BAR_WIFI_PASSWORD },
+  { WORK_WIFI_SSID, WORK_WIFI_PASSWORD },
+  { HOME_WIFI_SSID, HOME_WIFI_PASSWORD },
 };
 
 const size_t UPSTREAM_NETWORK_COUNT =
