@@ -14,7 +14,7 @@ app.secret_key = os.environ.get(
 )
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DB_PATH = os.path.join(BASE_DIR, "quiz.db")
+DB_PATH = os.environ.get("COTTON_FLAT_DB_PATH", os.path.join(BASE_DIR, "quiz.db"))
 ADMIN_PASS = os.environ.get("COTTON_FLAT_ADMIN_PASS", "1346")
 FLASK_HOST = os.environ.get("FLASK_HOST", "0.0.0.0")
 FLASK_PORT = int(os.environ.get("FLASK_PORT", "5000"))
@@ -176,7 +176,9 @@ def init_db():
         );
     """)
     ensure_column(conn, "questions", "seed_key", "TEXT")
+    ensure_column(conn, "questions", "question_number", "INTEGER")
     conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_questions_seed_key ON questions(seed_key)")
+    conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_questions_question_number ON questions(question_number)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_questions_approved_id ON questions(approved, id)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_votes_question_id ON votes(question_id)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_responses_question_id ON text_responses(question_id)")
@@ -202,6 +204,11 @@ def init_db():
         cleaned = strip_internal_round_labels(row["text"])
         if cleaned != row["text"]:
             conn.execute("UPDATE suggestions SET text = ? WHERE id = ?", (cleaned, row["id"]))
+
+    missing_numbers = conn.execute("SELECT COUNT(*) FROM questions WHERE question_number IS NULL").fetchone()[0]
+    if missing_numbers:
+        for number, row in enumerate(conn.execute("SELECT id FROM questions ORDER BY id ASC"), 1):
+            conn.execute("UPDATE questions SET question_number = ? WHERE id = ?", (number, row["id"]))
 
     conn.commit()
     conn.close()
@@ -260,6 +267,21 @@ def participant_for_pin(conn, pin):
     return cur.lastrowid
 
 
+def next_question_number(conn):
+    return (conn.execute("SELECT COALESCE(MAX(question_number), 0) FROM questions").fetchone()[0] or 0) + 1
+
+
+def first_unanswered_index(questions, answered_ids):
+    for index, question in enumerate(questions):
+        if question["id"] not in answered_ids:
+            return index
+    return None
+
+
+def complete_quiz_page(message):
+    return page("Quiz Complete", f"<h1>Thanks!</h1><p>{escape(message)}</p><a class='btn btn-ok' href='/answers'>See Answers</a><a class='btn btn-sec' href='/'>Menu</a>")
+
+
 def question_form(title, action, question=None, error=""):
     question = question or {}
     question_type = "open" if question.get("is_open_text", 1) else "choice"
@@ -285,7 +307,7 @@ def menu():
 @app.route("/quiz", methods=["GET", "POST"])
 def quiz():
     conn = db_conn()
-    questions = conn.execute("SELECT * FROM questions WHERE approved = 1 ORDER BY id ASC").fetchall()
+    questions = conn.execute("SELECT * FROM questions WHERE approved = 1 ORDER BY question_number ASC, id ASC").fetchall()
     if not questions:
         conn.close()
         return page("Take Quiz", "<h1>Take Quiz</h1><p>No approved questions yet.</p>")
@@ -300,21 +322,41 @@ def quiz():
         conn.close()
         session["participant_pin"] = pin
         session["participant_id"] = participant_id
-        return redirect(url_for("quiz", q=0))
+        return redirect(url_for("quiz"))
 
     if not session.get("participant_pin"):
         conn.close()
         return page("Enter PIN", "<h1>Enter your PIN</h1><p class='muted'>Use the same PIN each time so the host can track your answers and drink-token progress.</p>" + pin_form())
+
+    participant_id = session.get("participant_id")
+    if not participant_id:
+        participant_id = participant_for_pin(conn, session["participant_pin"])
+        conn.commit()
+        session["participant_id"] = participant_id
+
+    answered_ids = {
+        row["question_id"]
+        for row in conn.execute("SELECT question_id FROM participant_answers WHERE participant_id = ?", (participant_id,))
+    }
+    resume_index = first_unanswered_index(questions, answered_ids)
+    if resume_index is None:
+        conn.close()
+        return complete_quiz_page("You've already answered every available question.")
 
     try:
         index = int(request.values.get("q", "0"))
     except (TypeError, ValueError):
         index = 0
     index = max(0, min(index, len(questions) - 1))
+    if request.method == "GET" and index != resume_index:
+        conn.close()
+        return redirect(url_for("quiz", q=resume_index))
+    if questions[index]["id"] in answered_ids:
+        conn.close()
+        return redirect(url_for("quiz", q=resume_index))
     question = questions[index]
 
     if request.method == "POST":
-        participant_id = session.get("participant_id")
         valid_answer = False
         if question["is_open_text"]:
             message = request.form.get("message", "").strip()[:MAX_RESPONSE_LENGTH]
@@ -337,9 +379,12 @@ def quiz():
                 conn.execute("INSERT OR IGNORE INTO drink_tokens (participant_id, milestone, created_at) VALUES (?, ?, ?)", (participant_id, milestone, now()))
         conn.commit()
         conn.close()
-        if index + 1 >= len(questions):
-            return page("Quiz Complete", "<h1>Thanks!</h1><p>Your answer was saved.</p><a class='btn btn-ok' href='/answers'>See Answers</a><a class='btn btn-sec' href='/'>Menu</a>")
-        return redirect(url_for("quiz", q=index + 1))
+        if not valid_answer:
+            return redirect(url_for("quiz", q=resume_index))
+        next_index = first_unanswered_index(questions, answered_ids | {question["id"]})
+        if next_index is None:
+            return complete_quiz_page("Your answer was saved.")
+        return redirect(url_for("quiz", q=next_index))
 
     body = f"<p class='muted'>Question {index + 1} of {len(questions)} · PIN {escape(session['participant_pin'])}</p><h1>Take Quiz</h1><div class='question left'><h3>{escape(strip_internal_round_labels(question['text']))}</h3><form method='post' action='{escape(url_for('quiz', q=index))}' class='left'>"
     if question["is_open_text"]:
@@ -359,7 +404,7 @@ def pin_form():
 @app.route("/answers")
 def answers():
     conn = db_conn()
-    questions = conn.execute("SELECT * FROM questions WHERE approved = 1 ORDER BY id ASC").fetchall()
+    questions = conn.execute("SELECT * FROM questions WHERE approved = 1 ORDER BY question_number ASC, id ASC").fetchall()
     body = "<h1>📊 Community Answers</h1><p class='muted'>Live results from the room.</p><a class='btn btn-sec' href='/'>Back to Menu</a>"
     for question in questions:
         qid = question["id"]
@@ -477,7 +522,7 @@ def add_question():
             error = f"<div class='error'>{escape(error_text)}</div>"
         else:
             conn = db_conn()
-            conn.execute("INSERT INTO questions (text, is_open_text, op1, op2, op3, op4, approved, created_at) VALUES (?, ?, ?, ?, ?, ?, 1, ?)", (text[:500], is_open, options[0][:200], options[1][:200], options[2][:200], options[3][:200], now()))
+            conn.execute("INSERT INTO questions (text, is_open_text, op1, op2, op3, op4, approved, created_at, question_number) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)", (text[:500], is_open, options[0][:200], options[1][:200], options[2][:200], options[3][:200], now(), next_question_number(conn)))
             conn.commit(); conn.close()
             return redirect(url_for("admin"))
     return question_form("Add Question", url_for("add_question"), {"is_open_text": 1}, error)
@@ -548,7 +593,7 @@ def approve_suggestion(suggestion_id):
     suggestion = conn.execute("SELECT * FROM suggestions WHERE id = ?", (suggestion_id,)).fetchone()
     if suggestion:
         text = strip_internal_round_labels(suggestion["text"])
-        conn.execute("INSERT INTO questions (text, is_open_text, op1, op2, op3, op4, approved, created_at) VALUES (?, ?, ?, ?, ?, ?, 1, ?)", (text, suggestion["is_open_text"], suggestion["op1"], suggestion["op2"], suggestion["op3"], suggestion["op4"], now()))
+        conn.execute("INSERT INTO questions (text, is_open_text, op1, op2, op3, op4, approved, created_at, question_number) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)", (text, suggestion["is_open_text"], suggestion["op1"], suggestion["op2"], suggestion["op3"], suggestion["op4"], now(), next_question_number(conn)))
         conn.execute("DELETE FROM suggestions WHERE id = ?", (suggestion_id,))
         conn.commit()
     conn.close()

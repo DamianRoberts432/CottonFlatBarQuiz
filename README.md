@@ -10,6 +10,14 @@ The Flask app listens on port `5000` and is started by systemd from:
 /home/d/CottonFlatBarQuiz/Quiz.py
 ```
 
+Quiz data, including per-PIN answer progress, is stored locally in:
+
+```text
+/home/d/CottonFlatBarQuiz/quiz.db
+```
+
+You can override the database location at runtime with the `COTTON_FLAT_DB_PATH` environment variable. If the database file does not exist yet, the app creates it automatically.
+
 Install the dependency:
 
 ```bash
