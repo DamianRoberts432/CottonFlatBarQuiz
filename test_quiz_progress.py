@@ -60,6 +60,26 @@ class QuizProgressTestCase(unittest.TestCase):
         finally:
             conn.close()
 
+    def token_milestones(self, pin):
+        conn = Quiz.db_conn()
+        try:
+            rows = conn.execute(
+                """SELECT dt.milestone
+                   FROM drink_tokens dt
+                   JOIN participants p ON p.id = dt.participant_id
+                   WHERE p.pin = ?
+                   ORDER BY dt.milestone ASC""",
+                (pin,),
+            ).fetchall()
+            return [row[0] for row in rows]
+        finally:
+            conn.close()
+
+    def answer_questions(self, client, start, total):
+        for index in range(start, start + total):
+            response = self.answer_question(client, index)
+            self.assertEqual(response.status_code, 200)
+
     def test_new_pin_starts_from_first_question(self):
         first_question = self.approved_questions()[0]["text"]
 
@@ -127,8 +147,34 @@ class QuizProgressTestCase(unittest.TestCase):
         response = returning_client.post("/quiz", data={"pin": "done1"}, follow_redirects=True)
         body = response.get_data(as_text=True)
 
-        self.assertIn("You've already answered every available question.", body)
+        self.assertIn("already answered every available question.", body)
         self.assertNotIn(only_question, body)
+
+    def test_tokens_are_issued_every_20_answers(self):
+        self.trim_questions(60)
+        client = Quiz.app.test_client()
+        client.post("/quiz", data={"pin": "token20"}, follow_redirects=True)
+
+        self.answer_questions(client, 0, 20)
+        self.assertEqual(self.token_milestones("TOKEN20"), [20])
+
+        self.answer_questions(client, 20, 20)
+        self.assertEqual(self.token_milestones("TOKEN20"), [20, 40])
+
+        self.answer_questions(client, 40, 20)
+        self.assertEqual(self.token_milestones("TOKEN20"), [20, 40, 60])
+
+    def test_reanswering_question_does_not_duplicate_tokens(self):
+        self.trim_questions(20)
+        client = Quiz.app.test_client()
+        client.post("/quiz", data={"pin": "nodupe1"}, follow_redirects=True)
+
+        self.answer_questions(client, 0, 20)
+        self.assertEqual(self.token_milestones("NODUPE1"), [20])
+
+        response = self.answer_question(client, 19)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(self.token_milestones("NODUPE1"), [20])
 
 
 if __name__ == "__main__":
