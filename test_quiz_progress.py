@@ -1,6 +1,7 @@
 import os
 import tempfile
 import unittest
+from shutil import copyfile
 from pathlib import Path
 
 
@@ -15,14 +16,22 @@ class QuizProgressTestCase(unittest.TestCase):
         self.db_path = Path(TEST_DB_DIR.name) / f"{self._testMethodName}.db"
         if self.db_path.exists():
             self.db_path.unlink()
+        self.source_path = Path(TEST_DB_DIR.name) / f"{self._testMethodName}.py"
+        copyfile(Path(Quiz.__file__), self.source_path)
         Quiz.DB_PATH = str(self.db_path)
+        Quiz.SOURCE_FILE_PATH = str(self.source_path)
         Quiz.app.config["TESTING"] = True
+        Quiz.DELETED_SEED_QUESTION_NUMBERS[:] = []
         Quiz.init_db()
         self.client = Quiz.app.test_client()
 
     def tearDown(self):
         if self.db_path.exists():
             self.db_path.unlink()
+        if self.source_path.exists():
+            self.source_path.unlink()
+        Quiz.SOURCE_FILE_PATH = Quiz.__file__
+        Quiz.DELETED_SEED_QUESTION_NUMBERS[:] = []
 
     def approved_questions(self):
         conn = Quiz.db_conn()
@@ -79,6 +88,12 @@ class QuizProgressTestCase(unittest.TestCase):
         for index in range(start, start + total):
             response = self.answer_question(client, index)
             self.assertEqual(response.status_code, 200)
+
+    def make_admin(self, client=None):
+        client = client or self.client
+        with client.session_transaction() as session:
+            session["is_admin"] = True
+        return client
 
     def test_new_pin_starts_from_first_question(self):
         first_question = self.approved_questions()[0]["text"]
@@ -175,6 +190,33 @@ class QuizProgressTestCase(unittest.TestCase):
         response = self.answer_question(client, 19)
         self.assertEqual(response.status_code, 200)
         self.assertEqual(self.token_milestones("NODUPE1"), [20])
+
+    def test_make_seed_questions_skips_deleted_numbers_but_keeps_source_numbers(self):
+        Quiz.DELETED_SEED_QUESTION_NUMBERS[:] = [2, 5]
+
+        questions = Quiz.make_seed_questions()
+
+        numbers = [question["question_number"] for question in questions[:6]]
+        self.assertEqual(numbers, [1, 3, 4, 6, 7, 8])
+        self.assertNotIn(2, numbers)
+        self.assertNotIn(5, numbers)
+        self.assertEqual(len(questions), 198)
+
+    def test_admin_can_delete_by_question_number_and_sync_source(self):
+        self.make_admin()
+        response = self.client.post("/admin/delete-question-number/5", follow_redirects=False)
+
+        self.assertEqual(response.status_code, 302)
+
+        conn = Quiz.db_conn()
+        try:
+            row = conn.execute("SELECT id FROM questions WHERE question_number = 5").fetchone()
+        finally:
+            conn.close()
+
+        self.assertIsNone(row)
+        self.assertEqual(Quiz.DELETED_SEED_QUESTION_NUMBERS, [5])
+        self.assertIn("DELETED_SEED_QUESTION_NUMBERS = [5]", self.source_path.read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":

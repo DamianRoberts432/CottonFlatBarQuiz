@@ -15,6 +15,7 @@ app.secret_key = os.environ.get(
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.environ.get("COTTON_FLAT_DB_PATH", os.path.join(BASE_DIR, "quiz.db"))
+SOURCE_FILE_PATH = os.path.abspath(__file__)
 ADMIN_PASS = os.environ.get("COTTON_FLAT_ADMIN_PASS", "1346")
 FLASK_HOST = os.environ.get("FLASK_HOST", "0.0.0.0")
 FLASK_PORT = int(os.environ.get("FLASK_PORT", "5000"))
@@ -82,6 +83,8 @@ OPEN_SUFFIXES = [
     "Answer as honest as you like",
 ]
 
+DELETED_SEED_QUESTION_NUMBERS = []
+
 CHOICE_QUESTIONS = [
     ("Which group-chat role has the most social power despite doing the least work?", ["The person who says ‘following’", "The reaction-button monarch", "The silent reader", "The accidental voice-echoer"]),
     ("Which item is most likely to become a Veblen good at a painfully fashionable café?", ["Plain tap water", "A tiny pastry with a French name", "A suspiciously expensive tote bag", "A normal-size coffee"]),
@@ -124,17 +127,55 @@ def ensure_column(conn, table, column, definition):
         conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
 
 
+def seed_question_number(seed_key):
+    match = re.fullmatch(r"(?:choice|open)-(\d+)", str(seed_key or ""))
+    return int(match.group(1)) if match else None
+
+
+def next_available_question_number(used_numbers):
+    question_number = 1
+    while question_number in used_numbers:
+        question_number += 1
+    return question_number
+
+
 def make_seed_questions():
     questions = []
+    deleted_numbers = set(DELETED_SEED_QUESTION_NUMBERS)
     for index in range(200):
+        question_number = index + 1
+        if question_number in deleted_numbers:
+            continue
         if index % 5 == 0:
             text, options = CHOICE_QUESTIONS[(index // 5) % len(CHOICE_QUESTIONS)]
-            questions.append({"seed_key": f"choice-{index + 1}", "text": text, "is_open_text": 0, "options": options})
+            questions.append({"seed_key": f"choice-{question_number}", "question_number": question_number, "text": text, "is_open_text": 0, "options": options})
         else:
             base = OPEN_QUESTION_TEMPLATES[index % len(OPEN_QUESTION_TEMPLATES)]
             suffix = OPEN_SUFFIXES[(index // len(OPEN_QUESTION_TEMPLATES)) % len(OPEN_SUFFIXES)]
-            questions.append({"seed_key": f"open-{index + 1}", "text": f"{base}{suffix}", "is_open_text": 1, "options": []})
+            questions.append({"seed_key": f"open-{question_number}", "question_number": question_number, "text": f"{base}{suffix}", "is_open_text": 1, "options": []})
     return questions
+
+
+def record_deleted_seed_question_number(question_number):
+    existing_numbers = set(DELETED_SEED_QUESTION_NUMBERS)
+    if question_number in existing_numbers:
+        return False
+    existing_numbers.add(question_number)
+    numbers = ", ".join(str(number) for number in sorted(existing_numbers))
+    with open(SOURCE_FILE_PATH, "r", encoding="utf-8") as source_file:
+        source = source_file.read()
+    updated_source, replacements = re.subn(
+        r"DELETED_SEED_QUESTION_NUMBERS = \[[^\]]*\]",
+        f"DELETED_SEED_QUESTION_NUMBERS = [{numbers}]",
+        source,
+        count=1,
+    )
+    if replacements != 1:
+        raise RuntimeError("Could not update deleted seed question numbers in source file")
+    with open(SOURCE_FILE_PATH, "w", encoding="utf-8") as source_file:
+        source_file.write(updated_source)
+    DELETED_SEED_QUESTION_NUMBERS[:] = sorted(existing_numbers)
+    return True
 
 
 def init_db():
@@ -190,11 +231,11 @@ def init_db():
         for item in make_seed_questions():
             options = item["options"] + [""] * 4
             conn.execute("""INSERT INTO questions
-                (text, is_open_text, op1, op2, op3, op4, approved, created_at, seed_key)
-                VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)""", (
+                (text, is_open_text, op1, op2, op3, op4, approved, created_at, seed_key, question_number)
+                VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?)""", (
                     strip_internal_round_labels(item["text"])[:MAX_QUESTION_LENGTH], item["is_open_text"],
                     options[0][:MAX_OPTION_LENGTH], options[1][:MAX_OPTION_LENGTH],
-                    options[2][:MAX_OPTION_LENGTH], options[3][:MAX_OPTION_LENGTH], now(), item["seed_key"]))
+                    options[2][:MAX_OPTION_LENGTH], options[3][:MAX_OPTION_LENGTH], now(), item["seed_key"], item["question_number"]))
 
     for row in conn.execute("SELECT id, text FROM questions WHERE text IS NOT NULL"):
         cleaned = strip_internal_round_labels(row["text"])
@@ -207,8 +248,16 @@ def init_db():
 
     missing_numbers = conn.execute("SELECT COUNT(*) FROM questions WHERE question_number IS NULL").fetchone()[0]
     if missing_numbers:
-        for number, row in enumerate(conn.execute("SELECT id FROM questions ORDER BY id ASC"), 1):
+        used_numbers = {
+            row["question_number"]
+            for row in conn.execute("SELECT question_number FROM questions WHERE question_number IS NOT NULL")
+        }
+        for row in conn.execute("SELECT id, seed_key FROM questions WHERE question_number IS NULL ORDER BY id ASC"):
+            number = seed_question_number(row["seed_key"])
+            if number is None or number in used_numbers:
+                number = next_available_question_number(used_numbers)
             conn.execute("UPDATE questions SET question_number = ? WHERE id = ?", (number, row["id"]))
+            used_numbers.add(number)
 
     conn.commit()
     conn.close()
@@ -489,7 +538,7 @@ def admin():
     body += "<h2>Active Questions</h2>"
     for question in questions:
         kind = "Free write" if question["is_open_text"] else "Multiple choice"
-        body += f"<div class='question left'><strong>{escape(strip_internal_round_labels(question['text']))}</strong><p class='muted'>{kind} · ID {question['id']}</p><div class='admin-row'><a class='btn btn-warn small' href='/admin/edit-question/{question['id']}'>Edit</a><form method='post' action='/admin/delete-question/{question['id']}' onsubmit=\"return confirm('Delete this question and all answers?');\"><button class='btn btn-del small'>Delete</button></form></div></div>"
+        body += f"<div class='question left'><strong>{escape(strip_internal_round_labels(question['text']))}</strong><p class='muted'>{kind} · Question {question['question_number']} · ID {question['id']}</p><div class='admin-row'><a class='btn btn-warn small' href='/admin/edit-question/{question['id']}'>Edit</a><form method='post' action='/admin/delete-question-number/{question['question_number']}' onsubmit=\"return confirm('Delete this question and all answers?');\"><button class='btn btn-del small'>Delete</button></form></div></div>"
     conn.close()
     body += "<a class='btn btn-sec' href='/admin/logout'>Log Out</a><a class='btn btn-sec' href='/'>Back to Menu</a>"
     return page("Host Admin", body)
@@ -623,6 +672,25 @@ def delete_question(question_id):
     conn.execute("DELETE FROM participant_answers WHERE question_id = ?", (question_id,))
     conn.execute("DELETE FROM questions WHERE id = ?", (question_id,))
     conn.commit(); conn.close(); return redirect(url_for("admin"))
+
+
+@app.route("/admin/delete-question-number/<int:question_number>", methods=["POST"])
+def delete_question_number(question_number):
+    denied = require_admin()
+    if denied:
+        return denied
+    conn = db_conn()
+    question = conn.execute("SELECT id, seed_key, question_number FROM questions WHERE question_number = ?", (question_number,)).fetchone()
+    if question:
+        if question["seed_key"] and seed_question_number(question["seed_key"]) == question["question_number"]:
+            record_deleted_seed_question_number(question["question_number"])
+        conn.execute("DELETE FROM votes WHERE question_id = ?", (question["id"],))
+        conn.execute("DELETE FROM text_responses WHERE question_id = ?", (question["id"],))
+        conn.execute("DELETE FROM participant_answers WHERE question_id = ?", (question["id"],))
+        conn.execute("DELETE FROM questions WHERE id = ?", (question["id"],))
+        conn.commit()
+    conn.close()
+    return redirect(url_for("admin"))
 
 
 @app.route("/admin/delete-response/<int:response_id>", methods=["POST"])
