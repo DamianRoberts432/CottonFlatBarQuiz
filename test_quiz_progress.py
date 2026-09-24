@@ -225,10 +225,46 @@ class QuizProgressTestCase(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertIn("/games/dopewars", body)
+        self.assertIn("Back to Menu", body)
+
+    def test_gold_users_page_lists_participants_without_double_counting_tokens(self):
+        leaderboard_client = Quiz.app.test_client()
+        leaderboard_client.post("/quiz", data={"pin": "gold20"}, follow_redirects=True)
+        self.answer_questions(leaderboard_client, 0, 20)
+
+        second_client = Quiz.app.test_client()
+        second_client.post("/quiz", data={"pin": "gold40"}, follow_redirects=True)
+        self.answer_questions(second_client, 0, 40)
+
+        response = self.client.get("/gold-users")
+        body = response.get_data(as_text=True)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("Gold Users", body)
+        self.assertIn("GOLD20", body)
+        self.assertIn("GOLD40", body)
+        self.assertIn("<td>1</td><td>GOLD40</td><td>40</td><td>2</td><td>0</td><td>2</td><td>0/20</td>", body)
+        self.assertIn("<td>2</td><td>GOLD20</td><td>20</td><td>1</td><td>0</td><td>1</td><td>0/20</td>", body)
+
+    def test_admin_page_shows_token_counts_without_join_multiplication(self):
+        client = Quiz.app.test_client()
+        client.post("/quiz", data={"pin": "admin20"}, follow_redirects=True)
+        self.answer_questions(client, 0, 20)
+
+        self.make_admin()
+        response = self.client.get("/admin")
+        body = response.get_data(as_text=True)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("<td>ADMIN20</td><td>20</td><td>1</td><td>0</td><td>0/20</td>", body)
 
     def test_dopewars_new_game_initializes_starting_stats(self):
         response = self.client.get("/games/dopewars")
         self.assertEqual(response.status_code, 200)
+        body = response.get_data(as_text=True)
+        self.assertIn("Back to Games", body)
+        self.assertIn("Back to Menu", body)
+        self.assertIn("/games/dopewars/reset", body)
 
         with self.client.session_transaction() as session:
             state = session["dopewars_state"]

@@ -1,4 +1,5 @@
 from collections import Counter
+from contextlib import closing
 from datetime import datetime
 from html import escape
 import os
@@ -289,13 +290,18 @@ def init_db():
 
 BASE_STYLE = """
 <style>
-*{box-sizing:border-box}body{font-family:Arial,sans-serif;background:#0f1115;color:#f4f7ff;padding:20px;margin:0;min-height:100vh;display:flex;justify-content:center}.card{width:min(900px,100%);background:#171b22;border:1px solid #2a3140;border-radius:12px;padding:20px;box-shadow:0 10px 30px rgba(0,0,0,.25)}.left{display:flex;flex-direction:column;gap:12px}.muted{color:#a7b0c0}.error{background:#4a1b1b;border:1px solid #6d2f2f;padding:10px;border-radius:8px;color:#ffd1d1}.notice{background:#182d1e;border:1px solid #2b4e34;padding:10px;border-radius:8px;color:#d7f9d1}.btn{display:inline-block;padding:10px 18px;border-radius:8px;text-decoration:none;color:#fff;font-weight:700;cursor:pointer;border:none;margin:6px 0}.btn-ok{background:#2f7cf6}.btn-sec{background:#2a3140}.btn-warn{background:#d28a00}.btn-del{background:#b62d2d}.small{padding:6px 12px;font-size:12px}.question{background:#111821;border:1px solid #2a3140;border-radius:10px;padding:14px}.choice{display:flex;align-items:center;gap:8px;background:#161d2a;padding:10px;border-radius:8px}.resp{background:#121822;border:1px solid #2a3140;padding:10px;border-radius:8px;margin:5px 0}.bar{width:100%;height:12px;background:#1e2430;border-radius:999px;overflow:hidden;margin:8px 0}.fill{height:100%;background:#2f7cf6}.admin-row{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:10px}textarea,input{width:100%;padding:10px;border-radius:8px;border:1px solid #485264;background:#0d1219;color:#f4f7ff}.table{width:100%;border-collapse:collapse}th,td{padding:8px 10px;border-bottom:1px solid #2a3140;text-align:left}h1,h2,h3{margin:0 0 12px}.form{display:flex;flex-direction:column;gap:12px}input[type='radio']{width:auto}a{color:#9ac1ff}
+*{box-sizing:border-box}body{font-family:Arial,sans-serif;background:#0f1115;color:#f4f7ff;padding:20px;margin:0;min-height:100vh;display:flex;justify-content:center}.card{width:min(900px,100%);background:#171b22;border:1px solid #2a3140;border-radius:12px;padding:20px;box-shadow:0 10px 30px rgba(0,0,0,.25)}.left{display:flex;flex-direction:column;gap:12px}.muted{color:#a7b0c0}.error{background:#4a1b1b;border:1px solid #6d2f2f;padding:10px;border-radius:8px;color:#ffd1d1}.notice{background:#182d1e;border:1px solid #2b4e34;padding:10px;border-radius:8px;color:#d7f9d1}.btn{display:inline-block;padding:10px 18px;border-radius:8px;text-decoration:none;color:#fff;font-weight:700;cursor:pointer;border:none;margin:6px 0}.btn-ok{background:#2f7cf6}.btn-sec{background:#2a3140}.btn-warn{background:#d28a00}.btn-del{background:#b62d2d}.small{padding:6px 12px;font-size:12px}.question{background:#111821;border:1px solid #2a3140;border-radius:10px;padding:14px}.choice{display:flex;align-items:center;gap:8px;background:#161d2a;padding:10px;border-radius:8px}.resp{background:#121822;border:1px solid #2a3140;padding:10px;border-radius:8px;margin:5px 0}.bar{width:100%;height:12px;background:#1e2430;border-radius:999px;overflow:hidden;margin:8px 0}.fill{height:100%;background:#2f7cf6}.admin-row{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:10px}textarea,input,select{width:100%;padding:10px;border-radius:8px;border:1px solid #485264;background:#0d1219;color:#f4f7ff}.table{width:100%;border-collapse:collapse}th,td{padding:8px 10px;border-bottom:1px solid #2a3140;text-align:left}h1,h2,h3{margin:0 0 12px}.form{display:flex;flex-direction:column;gap:12px}input[type='radio']{width:auto}a{color:#9ac1ff}
 </style>
 """
 
 
 def page(title, body):
-    return "<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>" + f"<title>{escape(title)}</title>{BASE_STYLE}</head><body><main class='card'>" + body + "</main></body></html>"
+    return (
+        "<!doctype html><html><head><meta charset='utf-8'>"
+        "<meta name='viewport' content='width=device-width,initial-scale=1'>"
+        f"<title>{escape(title)}</title>{BASE_STYLE}</head><body><main class='card'>"
+        f"{body}</main></body></html>"
+    )
 
 
 def admin_required():
@@ -527,13 +533,38 @@ def health():
 
 @app.route("/")
 def menu():
-    return page("Cotton Flat Bar Quiz", "<h1>🍺 Cotton Flat Bar Quiz</h1><p class='muted'>Funny sociology, questionable opinions, and community data.</p><a class='btn btn-ok' href='/quiz'>▶ Take Quiz</a><a class='btn btn-sec' href='/submit-question'>✍ Submit Question</a><a class='btn btn-sec' href='/answers'>📊 Community Answers</a><a class='btn btn-sec' href='/games'>🕹 Games</a><a class='btn btn-sec' href='/admin'>🛠 Admin</a>")
+    return page("Cotton Flat Bar Quiz", "<h1>🍺 Cotton Flat Bar Quiz</h1><p class='muted'>Funny sociology, questionable opinions, and community data.</p><a class='btn btn-ok' href='/quiz'>▶ Take Quiz</a><a class='btn btn-sec' href='/submit-question'>✍ Submit Question</a><a class='btn btn-sec' href='/answers'>📊 Community Answers</a><a class='btn btn-sec' href='/gold-users'>🥇 Gold Users</a><a class='btn btn-sec' href='/games'>🕹 Games</a><a class='btn btn-sec' href='/admin'>🛠 Admin</a>")
 
 
 @app.route("/games")
 def games():
     body = "<h1>🕹 Games</h1><p class='muted'>Pick a game from the list below.</p><div class='question left'><h2>Dopewars</h2><p>Classic text-based street trading across NYC.</p><a class='btn btn-ok' href='/games/dopewars'>Play Dopewars</a></div><a class='btn btn-sec' href='/'>Back to Menu</a>"
     return page("Games", body)
+
+
+@app.route("/gold-users")
+def gold_users():
+    with closing(db_conn()) as conn:
+        participants = participant_stats(conn, sort_mode="leaderboard")
+
+    body = [
+        "<h1>🥇 Gold Users</h1>",
+        "<p class='muted'>Leaderboard for players earning the most drink tokens and answering the most questions.</p>",
+    ]
+    if participants:
+        body.append("<table class='table'><tr><th>#</th><th>PIN</th><th>Answered</th><th>Tokens ready</th><th>Tokens redeemed</th><th>Total tokens</th><th>Progress</th></tr>")
+        for index, participant in enumerate(participants, 1):
+            progress = participant["answered"] % TOKEN_MILESTONE
+            body.append(
+                f"<tr><td>{index}</td><td>{escape(participant['pin'])}</td><td>{participant['answered']}</td>"
+                f"<td>{participant['unredeemed']}</td><td>{participant['redeemed']}</td>"
+                f"<td>{participant['total_tokens']}</td><td>{progress}/{TOKEN_MILESTONE}</td></tr>"
+            )
+        body.append("</table>")
+    else:
+        body.append("<p class='muted'>No participants yet.</p>")
+    body.append("<a class='btn btn-sec' href='/'>Back to Menu</a>")
+    return page("Gold Users", "".join(body))
 
 
 @app.route("/games/dopewars", methods=["GET", "POST"])
@@ -724,37 +755,70 @@ def pin_form():
     return "<form method='post'><input name='pin' maxlength='20' minlength='4' required pattern='[A-Za-z0-9]+' placeholder='Enter your PIN'><button class='btn btn-ok' type='submit'>Start Quiz</button></form>"
 
 
+def participant_stats(conn, sort_mode="admin"):
+    order_by = {
+        "admin": "answered DESC, p.pin ASC",
+        "leaderboard": "total_tokens DESC, answered DESC, p.pin ASC",
+    }.get(sort_mode, "answered DESC, p.pin ASC")
+    return conn.execute(
+        f"""
+        WITH answered AS (
+            SELECT participant_id, COUNT(*) AS answered
+            FROM participant_answers
+            GROUP BY participant_id
+        ),
+        tokens AS (
+            SELECT participant_id,
+                   SUM(CASE WHEN redeemed_at IS NULL THEN 1 ELSE 0 END) AS unredeemed,
+                   SUM(CASE WHEN redeemed_at IS NOT NULL THEN 1 ELSE 0 END) AS redeemed,
+                   COUNT(*) AS total_tokens
+            FROM drink_tokens
+            GROUP BY participant_id
+        )
+        SELECT p.id,
+               p.pin,
+               COALESCE(a.answered, 0) AS answered,
+               COALESCE(t.unredeemed, 0) AS unredeemed,
+               COALESCE(t.redeemed, 0) AS redeemed,
+               COALESCE(t.total_tokens, 0) AS total_tokens
+        FROM participants p
+        LEFT JOIN answered a ON a.participant_id = p.id
+        LEFT JOIN tokens t ON t.participant_id = p.id
+        ORDER BY {order_by}
+        """
+    ).fetchall()
+
+
 @app.route("/answers")
 def answers():
-    conn = db_conn()
-    questions = conn.execute("SELECT * FROM questions WHERE approved = 1 ORDER BY question_number ASC, id ASC").fetchall()
-    body = "<h1>📊 Community Answers</h1><p class='muted'>Live results from the room.</p><a class='btn btn-sec' href='/'>Back to Menu</a>"
-    for question in questions:
-        qid = question["id"]
-        body += f"<div class='question left'><h3>❓ {escape(strip_internal_round_labels(question['text']))}</h3>"
-        if question["is_open_text"]:
-            responses = conn.execute("SELECT id, author, message, created_at FROM text_responses WHERE question_id = ? ORDER BY id DESC", (qid,)).fetchall()
-            if responses:
-                common = Counter([" ".join(row["message"].split()).casefold() for row in responses]).most_common(5)
-                body += "<p class='muted'>Common themes:</p><ul>" + "".join(f"<li>{escape(answer)} — {count}</li>" for answer, count in common) + "</ul><p class='muted'>Individual responses:</p>"
-                for response in responses:
-                    delete = f"<form method='post' action='/admin/delete-response/{response['id']}'><button class='btn btn-del small'>Delete</button></form>" if admin_required() else ""
-                    body += f"<div class='resp'><strong>{escape(response['author'])}</strong>: {escape(response['message'])}{delete}</div>"
+    with closing(db_conn()) as conn:
+        questions = conn.execute("SELECT * FROM questions WHERE approved = 1 ORDER BY question_number ASC, id ASC").fetchall()
+        body = "<h1>📊 Community Answers</h1><p class='muted'>Live results from the room.</p><a class='btn btn-sec' href='/'>Back to Menu</a>"
+        for question in questions:
+            qid = question["id"]
+            body += f"<div class='question left'><h3>❓ {escape(strip_internal_round_labels(question['text']))}</h3>"
+            if question["is_open_text"]:
+                responses = conn.execute("SELECT id, author, message, created_at FROM text_responses WHERE question_id = ? ORDER BY id DESC", (qid,)).fetchall()
+                if responses:
+                    common = Counter([" ".join(row["message"].split()).casefold() for row in responses]).most_common(5)
+                    body += "<p class='muted'>Common themes:</p><ul>" + "".join(f"<li>{escape(answer)} — {count}</li>" for answer, count in common) + "</ul><p class='muted'>Individual responses:</p>"
+                    for response in responses:
+                        delete = f"<form method='post' action='/admin/delete-response/{response['id']}'><button class='btn btn-del small'>Delete</button></form>" if admin_required() else ""
+                        body += f"<div class='resp'><strong>{escape(response['author'])}</strong>: {escape(response['message'])}{delete}</div>"
+                else:
+                    body += "<p class='muted'>No answers yet.</p>"
             else:
-                body += "<p class='muted'>No answers yet.</p>"
-        else:
-            options = options_for(question)
-            rows = conn.execute("SELECT choice, COUNT(*) AS total FROM votes WHERE question_id = ? GROUP BY choice", (qid,)).fetchall()
-            counts = {row["choice"]: row["total"] for row in rows}
-            total = sum(counts.values())
-            for number, option in enumerate(options, 1):
-                count = counts.get(number, 0)
-                percent = round((count / total) * 100) if total else 0
-                body += f"<p>{escape(option)} — <strong>{count}</strong> ({percent}%)</p><div class='bar'><div class='fill' style='width:{percent}%'></div></div>"
-        if admin_required():
-            body += f"<div class='admin-row'><a class='btn btn-warn small' href='/admin/edit-question/{qid}'>Edit</a><form method='post' action='/admin/delete-question/{qid}' onsubmit=\"return confirm('Delete this question and all its answers?');\"><button class='btn btn-del small'>Delete</button></form></div>"
-        body += "</div>"
-    conn.close()
+                options = options_for(question)
+                rows = conn.execute("SELECT choice, COUNT(*) AS total FROM votes WHERE question_id = ? GROUP BY choice", (qid,)).fetchall()
+                counts = {row["choice"]: row["total"] for row in rows}
+                total = sum(counts.values())
+                for number, option in enumerate(options, 1):
+                    count = counts.get(number, 0)
+                    percent = round((count / total) * 100) if total else 0
+                    body += f"<p>{escape(option)} — <strong>{count}</strong> ({percent}%)</p><div class='bar'><div class='fill' style='width:{percent}%'></div></div>"
+            if admin_required():
+                body += f"<div class='admin-row'><a class='btn btn-warn small' href='/admin/edit-question/{qid}'>Edit</a><form method='post' action='/admin/delete-question/{qid}' onsubmit=\"return confirm('Delete this question and all its answers?');\"><button class='btn btn-del small'>Delete</button></form></div>"
+            body += "</div>"
     return page("Community Answers", body)
 
 
@@ -767,9 +831,9 @@ def submit_question():
         if error_text:
             error = f"<div class='error'>{escape(error_text)}</div>"
         else:
-            conn = db_conn()
-            conn.execute("INSERT INTO suggestions (text, is_open_text, op1, op2, op3, op4, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)", (text[:500], is_open, options[0][:200], options[1][:200], options[2][:200], options[3][:200], now()))
-            conn.commit(); conn.close()
+            with closing(db_conn()) as conn:
+                conn.execute("INSERT INTO suggestions (text, is_open_text, op1, op2, op3, op4, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)", (text[:500], is_open, options[0][:200], options[1][:200], options[2][:200], options[3][:200], now()))
+                conn.commit()
             return page("Question Submitted", "<h1>Thank you!</h1><div class='notice'>Your question is waiting for host approval.</div><a class='btn btn-sec' href='/'>Back to Menu</a>")
     return question_form("Submit Question", url_for("submit_question"), {"is_open_text": 1}, error)
 
@@ -784,17 +848,13 @@ def admin():
     if not admin_required():
         return page("Admin", "<h1>Host Admin</h1><form method='post'><input type='password' name='password' required placeholder='Admin code'><input type='hidden' name='action' value='login'><button class='btn btn-ok' type='submit'>Log In</button></form>")
 
-    conn = db_conn()
-    suggestions = conn.execute("SELECT * FROM suggestions ORDER BY id ASC").fetchall()
-    questions = conn.execute("SELECT * FROM questions ORDER BY id DESC").fetchall()
-    participants = conn.execute("""SELECT p.id, p.pin, COUNT(DISTINCT pa.question_id) AS answered,
-        COALESCE(SUM(CASE WHEN dt.redeemed_at IS NULL THEN 1 ELSE 0 END), 0) AS unredeemed,
-        COALESCE(SUM(CASE WHEN dt.redeemed_at IS NOT NULL THEN 1 ELSE 0 END), 0) AS redeemed
-        FROM participants p LEFT JOIN participant_answers pa ON pa.participant_id = p.id
-        LEFT JOIN drink_tokens dt ON dt.participant_id = p.id GROUP BY p.id ORDER BY answered DESC, p.pin""").fetchall()
+    with closing(db_conn()) as conn:
+        suggestions = conn.execute("SELECT * FROM suggestions ORDER BY id ASC").fetchall()
+        questions = conn.execute("SELECT * FROM questions ORDER BY id DESC").fetchall()
+        participants = participant_stats(conn)
     body = "<h1>Host Admin</h1><a class='btn btn-ok' href='/admin/add-question'>Add Question</a><h2>Participant Drink Tokens</h2>"
     if participants:
-        body += "<table><tr><th>PIN</th><th>Answered</th><th>Tokens ready</th><th>Given</th><th>Progress</th><th>Action</th></tr>"
+        body += "<table class='table'><tr><th>PIN</th><th>Answered</th><th>Tokens ready</th><th>Given</th><th>Progress</th><th>Action</th></tr>"
         for participant in participants:
             progress = participant["answered"] % TOKEN_MILESTONE
             body += f"<tr><td>{escape(participant['pin'])}</td><td>{participant['answered']}</td><td>{participant['unredeemed']}</td><td>{participant['redeemed']}</td><td>{progress}/{TOKEN_MILESTONE}</td><td><a class='btn btn-ok small' href='/admin/redeem-token/{participant['id']}'>Redeem</a></td></tr>"
@@ -813,8 +873,7 @@ def admin():
     for question in questions:
         kind = "Free write" if question["is_open_text"] else "Multiple choice"
         body += f"<div class='question left'><strong>{escape(strip_internal_round_labels(question['text']))}</strong><p class='muted'>{kind} · Question {question['question_number']} · ID {question['id']}</p><div class='admin-row'><a class='btn btn-warn small' href='/admin/edit-question/{question['id']}'>Edit</a><form method='post' action='/admin/delete-question-number/{question['question_number']}' onsubmit=\"return confirm('Delete this question and all answers?');\"><button class='btn btn-del small'>Delete</button></form></div></div>"
-    conn.close()
-    body += "<a class='btn btn-sec' href='/admin/logout'>Log Out</a><a class='btn btn-sec' href='/'>Back to Menu</a>"
+    body += "<a class='btn btn-sec' href='/gold-users'>View Gold Users</a><a class='btn btn-sec' href='/admin/logout'>Log Out</a><a class='btn btn-sec' href='/'>Back to Menu</a>"
     return page("Host Admin", body)
 
 
@@ -823,12 +882,11 @@ def redeem_token(participant_id):
     denied = require_admin()
     if denied:
         return denied
-    conn = db_conn()
-    token = conn.execute("SELECT id FROM drink_tokens WHERE participant_id = ? AND redeemed_at IS NULL ORDER BY milestone LIMIT 1", (participant_id,)).fetchone()
-    if token:
-        conn.execute("UPDATE drink_tokens SET redeemed_at = ? WHERE id = ?", (now(), token["id"]))
-        conn.commit()
-    conn.close()
+    with closing(db_conn()) as conn:
+        token = conn.execute("SELECT id FROM drink_tokens WHERE participant_id = ? AND redeemed_at IS NULL ORDER BY milestone LIMIT 1", (participant_id,)).fetchone()
+        if token:
+            conn.execute("UPDATE drink_tokens SET redeemed_at = ? WHERE id = ?", (now(), token["id"]))
+            conn.commit()
     return redirect(url_for("admin"))
 
 
@@ -844,9 +902,9 @@ def add_question():
         if error_text:
             error = f"<div class='error'>{escape(error_text)}</div>"
         else:
-            conn = db_conn()
-            conn.execute("INSERT INTO questions (text, is_open_text, op1, op2, op3, op4, approved, created_at, question_number) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)", (text[:500], is_open, options[0][:200], options[1][:200], options[2][:200], options[3][:200], now(), next_question_number(conn)))
-            conn.commit(); conn.close()
+            with closing(db_conn()) as conn:
+                conn.execute("INSERT INTO questions (text, is_open_text, op1, op2, op3, op4, approved, created_at, question_number) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)", (text[:500], is_open, options[0][:200], options[1][:200], options[2][:200], options[3][:200], now(), next_question_number(conn)))
+                conn.commit()
             return redirect(url_for("admin"))
     return question_form("Add Question", url_for("add_question"), {"is_open_text": 1}, error)
 
@@ -912,14 +970,13 @@ def approve_suggestion(suggestion_id):
     denied = require_admin()
     if denied:
         return denied
-    conn = db_conn()
-    suggestion = conn.execute("SELECT * FROM suggestions WHERE id = ?", (suggestion_id,)).fetchone()
-    if suggestion:
-        text = strip_internal_round_labels(suggestion["text"])
-        conn.execute("INSERT INTO questions (text, is_open_text, op1, op2, op3, op4, approved, created_at, question_number) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)", (text, suggestion["is_open_text"], suggestion["op1"], suggestion["op2"], suggestion["op3"], suggestion["op4"], now(), next_question_number(conn)))
-        conn.execute("DELETE FROM suggestions WHERE id = ?", (suggestion_id,))
-        conn.commit()
-    conn.close()
+    with closing(db_conn()) as conn:
+        suggestion = conn.execute("SELECT * FROM suggestions WHERE id = ?", (suggestion_id,)).fetchone()
+        if suggestion:
+            text = strip_internal_round_labels(suggestion["text"])
+            conn.execute("INSERT INTO questions (text, is_open_text, op1, op2, op3, op4, approved, created_at, question_number) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)", (text, suggestion["is_open_text"], suggestion["op1"], suggestion["op2"], suggestion["op3"], suggestion["op4"], now(), next_question_number(conn)))
+            conn.execute("DELETE FROM suggestions WHERE id = ?", (suggestion_id,))
+            conn.commit()
     return redirect(url_for("admin"))
 
 
@@ -928,10 +985,9 @@ def reject_suggestion(suggestion_id):
     denied = require_admin()
     if denied:
         return denied
-    conn = db_conn()
-    conn.execute("DELETE FROM suggestions WHERE id = ?", (suggestion_id,))
-    conn.commit()
-    conn.close()
+    with closing(db_conn()) as conn:
+        conn.execute("DELETE FROM suggestions WHERE id = ?", (suggestion_id,))
+        conn.commit()
     return redirect(url_for("admin"))
 
 
@@ -940,12 +996,13 @@ def delete_question(question_id):
     denied = require_admin()
     if denied:
         return denied
-    conn = db_conn()
-    conn.execute("DELETE FROM votes WHERE question_id = ?", (question_id,))
-    conn.execute("DELETE FROM text_responses WHERE question_id = ?", (question_id,))
-    conn.execute("DELETE FROM participant_answers WHERE question_id = ?", (question_id,))
-    conn.execute("DELETE FROM questions WHERE id = ?", (question_id,))
-    conn.commit(); conn.close(); return redirect(url_for("admin"))
+    with closing(db_conn()) as conn:
+        conn.execute("DELETE FROM votes WHERE question_id = ?", (question_id,))
+        conn.execute("DELETE FROM text_responses WHERE question_id = ?", (question_id,))
+        conn.execute("DELETE FROM participant_answers WHERE question_id = ?", (question_id,))
+        conn.execute("DELETE FROM questions WHERE id = ?", (question_id,))
+        conn.commit()
+    return redirect(url_for("admin"))
 
 
 @app.route("/admin/delete-question-number/<int:question_number>", methods=["POST"])
@@ -953,17 +1010,16 @@ def delete_question_number(question_number):
     denied = require_admin()
     if denied:
         return denied
-    conn = db_conn()
-    question = conn.execute("SELECT id, seed_key, question_number FROM questions WHERE question_number = ?", (question_number,)).fetchone()
-    if question:
-        if question["seed_key"] and seed_question_number(question["seed_key"]) == question["question_number"]:
-            record_deleted_seed_question_number(question["question_number"])
-        conn.execute("DELETE FROM votes WHERE question_id = ?", (question["id"],))
-        conn.execute("DELETE FROM text_responses WHERE question_id = ?", (question["id"],))
-        conn.execute("DELETE FROM participant_answers WHERE question_id = ?", (question["id"],))
-        conn.execute("DELETE FROM questions WHERE id = ?", (question["id"],))
-        conn.commit()
-    conn.close()
+    with closing(db_conn()) as conn:
+        question = conn.execute("SELECT id, seed_key, question_number FROM questions WHERE question_number = ?", (question_number,)).fetchone()
+        if question:
+            if question["seed_key"] and seed_question_number(question["seed_key"]) == question["question_number"]:
+                record_deleted_seed_question_number(question["question_number"])
+            conn.execute("DELETE FROM votes WHERE question_id = ?", (question["id"],))
+            conn.execute("DELETE FROM text_responses WHERE question_id = ?", (question["id"],))
+            conn.execute("DELETE FROM participant_answers WHERE question_id = ?", (question["id"],))
+            conn.execute("DELETE FROM questions WHERE id = ?", (question["id"],))
+            conn.commit()
     return redirect(url_for("admin"))
 
 
@@ -972,10 +1028,9 @@ def delete_response(response_id):
     denied = require_admin()
     if denied:
         return denied
-    conn = db_conn()
-    conn.execute("DELETE FROM text_responses WHERE id = ?", (response_id,))
-    conn.commit()
-    conn.close()
+    with closing(db_conn()) as conn:
+        conn.execute("DELETE FROM text_responses WHERE id = ?", (response_id,))
+        conn.commit()
     return redirect(request.referrer or url_for("answers"))
 
 
