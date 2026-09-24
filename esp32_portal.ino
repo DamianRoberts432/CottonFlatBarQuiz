@@ -74,24 +74,30 @@ String piHealthIndicator() {
   return "<p class='health offline'>● Quiz server unreachable — check the Raspberry Pi.</p>";
 }
 
+String menuButton(const char* path, const char* label, const char* extraClass = nullptr) {
+  String classes = "btn";
+  if (extraClass && extraClass[0] != '\0') {
+    classes += " ";
+    classes += extraClass;
+  }
+  return "<a class='" + classes + "' href='" + piUrl(path) + "'>" + label + "</a>";
+}
+
 void handleMenu() {
   refreshPiHealthIfNeeded();
   String html;
   html.reserve(3400);
-  html += "<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>";
-  html += "<title>Cotton Flat Bar Quiz</title>";
-  html += "<style>body{font-family:Arial,sans-serif;background:#0f1115;color:#f4f7ff;margin:0;padding:28px;text-align:center}.card{max-width:520px;margin:auto;padding:28px;border-radius:14px;background:#1b2029}.btn{display:block;margin:14px 0;padding:15px;border-radius:8px;background:#1d8f4d;color:#fff;font-weight:bold;text-decoration:none}.secondary{background:#2d5f9f}.gold{background:#d4af37}.game{background:#6a3fb5}.admin{background:#455a64}.muted{color:#b8c0cc;font-size:.95em}.health{padding:12px;border-radius:8px;font-weight:bold}.online{background:#123f26;color:#80efad}.offline{background:#4b1f26;color:#ffb4bd}</style></head><body><main class='card'>";
-  html += "<h1>🍺 Cotton Flat Bar Quiz</h1><p>Connected to the quiz network.</p>";
+  html += R"HTML(<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>Cotton Flat Bar Quiz</title><style>body{font-family:Arial,sans-serif;background:#0f1115;color:#f4f7ff;margin:0;padding:28px;text-align:center}.card{max-width:520px;margin:auto;padding:28px;border-radius:14px;background:#1b2029}.btn{display:block;margin:14px 0;padding:15px;border-radius:8px;background:#1d8f4d;color:#fff;font-weight:bold;text-decoration:none}.secondary{background:#2d5f9f}.gold{background:#d4af37}.game{background:#6a3fb5}.admin{background:#455a64}.muted{color:#b8c0cc;font-size:.95em}.health{padding:12px;border-radius:8px;font-weight:bold}.online{background:#123f26;color:#80efad}.offline{background:#4b1f26;color:#ffb4bd}</style></head><body><main class='card'><h1>🍺 Cotton Flat Bar Quiz</h1><p>Connected to the quiz network.</p>)HTML";
   html += piHealthIndicator();
-  
-  html += "<a class='btn' href='" + piUrl("/quiz") + "'>Take Quiz</a>";
-  html += "<a class='btn secondary' href='" + piUrl("/answers") + "'>See Answers</a>";
-  html += "<a class='btn secondary' href='" + piUrl("/submit-question") + "'>Submit Question</a>";
-  html += "<a class='btn gold' href='" + piUrl("/gold-users") + "'>Gold Users</a>"; 
-  html += "<a class='btn game' href='" + piUrl("/games") + "'>Game</a>";
-  html += "<a class='btn admin' href='" + piUrl("/admin") + "'>Admin</a>";
-  
-  html += "<p class='muted'>Quiz System Pipeline Active.</p></main></body></html>";
+
+  html += menuButton("/quiz", "Take Quiz");
+  html += menuButton("/answers", "See Answers", "secondary");
+  html += menuButton("/submit-question", "Submit Question", "secondary");
+  html += menuButton("/gold-users", "Gold Users", "gold");
+  html += menuButton("/games", "Games", "game");
+  html += menuButton("/admin", "Admin", "admin");
+
+  html += R"HTML(<p class='muted'>Quiz System Pipeline Active.</p></main></body></html>)HTML";
   server.send(200, "text/html", html);
 }
 

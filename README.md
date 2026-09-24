@@ -79,6 +79,7 @@ sudo systemctl restart cotton-flat-quiz.service
 - `/quiz` — take the quiz
 - `/answers` — community answers
 - `/submit-question` — submit a question
+- `/gold-users` — participant leaderboard by drink-token progress
 - `/games` — games menu
 - `/games/dopewars` — text-based Dopewars game
 - `/admin` — host administration
