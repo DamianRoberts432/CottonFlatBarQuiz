@@ -3,6 +3,7 @@ import tempfile
 import unittest
 from shutil import copyfile
 from pathlib import Path
+from unittest.mock import patch
 
 
 TEST_DB_DIR = tempfile.TemporaryDirectory()
@@ -217,6 +218,131 @@ class QuizProgressTestCase(unittest.TestCase):
         self.assertIsNone(row)
         self.assertEqual(Quiz.DELETED_SEED_QUESTION_NUMBERS, [5])
         self.assertIn("DELETED_SEED_QUESTION_NUMBERS = [5]", self.source_path.read_text(encoding="utf-8"))
+
+    def test_games_page_lists_dopewars_link(self):
+        response = self.client.get("/games")
+        body = response.get_data(as_text=True)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("/games/dopewars", body)
+
+    def test_dopewars_new_game_initializes_starting_stats(self):
+        response = self.client.get("/games/dopewars")
+        self.assertEqual(response.status_code, 200)
+
+        with self.client.session_transaction() as session:
+            state = session["dopewars_state"]
+
+        self.assertEqual(state["cash"], 2000)
+        self.assertEqual(state["debt"], 5500)
+        self.assertEqual(state["day"], 1)
+        self.assertEqual(state["capacity"], 100)
+
+    def test_dopewars_buy_and_sell_updates_cash_inventory_and_capacity(self):
+        with self.client.session_transaction() as session:
+            session["dopewars_state"] = {
+                "day": 1,
+                "cash": 20000,
+                "debt": 5500,
+                "bank": 0,
+                "capacity": 100,
+                "location": "Bronx",
+                "inventory": {drug: 0 for drug in Quiz.DOPEWARS_PRICE_RANGES},
+                "prices": {drug: 100 for drug in Quiz.DOPEWARS_PRICE_RANGES},
+                "message": "",
+                "game_over": False,
+            }
+
+        buy_response = self.client.post("/games/dopewars", data={"action": "buy", "drug": "Weed", "quantity": "150"})
+        self.assertEqual(buy_response.status_code, 200)
+
+        with self.client.session_transaction() as session:
+            state = session["dopewars_state"]
+            self.assertEqual(state["inventory"]["Weed"], 100)
+            self.assertEqual(state["cash"], 10000)
+
+        sell_response = self.client.post("/games/dopewars", data={"action": "sell", "drug": "Weed", "quantity": "40"})
+        self.assertEqual(sell_response.status_code, 200)
+
+        with self.client.session_transaction() as session:
+            state = session["dopewars_state"]
+            self.assertEqual(state["inventory"]["Weed"], 60)
+            self.assertEqual(state["cash"], 14000)
+
+    def test_dopewars_travel_advances_day_and_interest(self):
+        with self.client.session_transaction() as session:
+            session["dopewars_state"] = {
+                "day": 1,
+                "cash": 2000,
+                "debt": 5500,
+                "bank": 0,
+                "capacity": 100,
+                "location": "Bronx",
+                "inventory": {drug: 0 for drug in Quiz.DOPEWARS_PRICE_RANGES},
+                "prices": {drug: 100 for drug in Quiz.DOPEWARS_PRICE_RANGES},
+                "message": "",
+                "game_over": False,
+            }
+
+        with patch("Quiz.random.random", return_value=0.99):
+            response = self.client.post("/games/dopewars", data={"action": "travel", "location": "Brooklyn"})
+
+        self.assertEqual(response.status_code, 200)
+        with self.client.session_transaction() as session:
+            state = session["dopewars_state"]
+            self.assertEqual(state["day"], 2)
+            self.assertEqual(state["debt"], 6050)
+
+    def test_dopewars_ends_on_day_30_with_final_score(self):
+        with self.client.session_transaction() as session:
+            session["dopewars_state"] = {
+                "day": 29,
+                "cash": 3000,
+                "debt": 1000,
+                "bank": 500,
+                "capacity": 100,
+                "location": "Bronx",
+                "inventory": {drug: 0 for drug in Quiz.DOPEWARS_PRICE_RANGES},
+                "prices": {drug: 100 for drug in Quiz.DOPEWARS_PRICE_RANGES},
+                "message": "",
+                "game_over": False,
+            }
+
+        with patch("Quiz.random.random", return_value=0.99):
+            response = self.client.post("/games/dopewars", data={"action": "travel", "location": "Manhattan"})
+
+        body = response.get_data(as_text=True)
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("Final score:", body)
+        self.assertIn("Day 30 reached.", body)
+        with self.client.session_transaction() as session:
+            self.assertTrue(session["dopewars_state"]["game_over"])
+
+    def test_dopewars_reset_restores_initial_state(self):
+        with self.client.session_transaction() as session:
+            session["dopewars_state"] = {
+                "day": 10,
+                "cash": 999,
+                "debt": 1,
+                "bank": 5000,
+                "capacity": 100,
+                "location": "Manhattan",
+                "inventory": {drug: 5 for drug in Quiz.DOPEWARS_PRICE_RANGES},
+                "prices": {drug: 100 for drug in Quiz.DOPEWARS_PRICE_RANGES},
+                "message": "changed",
+                "game_over": True,
+            }
+
+        response = self.client.post("/games/dopewars/reset", follow_redirects=True)
+        self.assertEqual(response.status_code, 200)
+
+        with self.client.session_transaction() as session:
+            state = session["dopewars_state"]
+            self.assertEqual(state["day"], 1)
+            self.assertEqual(state["cash"], 2000)
+            self.assertEqual(state["debt"], 5500)
+            self.assertEqual(sum(state["inventory"].values()), 0)
+            self.assertFalse(state["game_over"])
 
 
 if __name__ == "__main__":

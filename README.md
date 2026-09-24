@@ -79,6 +79,8 @@ sudo systemctl restart cotton-flat-quiz.service
 - `/quiz` — take the quiz
 - `/answers` — community answers
 - `/submit-question` — submit a question
+- `/games` — games menu
+- `/games/dopewars` — text-based Dopewars game
 - `/admin` — host administration
 
 ## ESP32 portal
@@ -98,6 +100,22 @@ http://192.168.4.4:5000
 The Pi must use `192.168.4.4` on the ESP32 access-point network. If that address changes, update `PI_IP` in `esp32_portal.ino`, reflash the ESP32, and restart the Flask service on the Pi.
 
 The ESP32 checks `/health` before displaying the menu. An offline indicator means the Pi service is not reachable; it does not necessarily indicate an ESP32 failure.
+
+## Games
+
+The Flask app includes a games menu at:
+
+```text
+http://192.168.4.4:5000/games
+```
+
+The first game is a Python text-based Dopewars implementation at:
+
+```text
+http://192.168.4.4:5000/games/dopewars
+```
+
+Players trade across NYC locations with day-by-day price changes, travel events, bank/debt actions, and a final score after day 30.
 
 ## ESP32 secrets
 
