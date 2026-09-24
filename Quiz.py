@@ -545,7 +545,7 @@ def games():
 @app.route("/gold-users")
 def gold_users():
     with closing(db_conn()) as conn:
-        participants = participant_stats(conn)
+        participants = participant_stats(conn, order_by="total_tokens DESC, answered DESC, p.pin ASC")
 
     body = [
         "<h1>🥇 Gold Users</h1>",
@@ -755,9 +755,9 @@ def pin_form():
     return "<form method='post'><input name='pin' maxlength='20' minlength='4' required pattern='[A-Za-z0-9]+' placeholder='Enter your PIN'><button class='btn btn-ok' type='submit'>Start Quiz</button></form>"
 
 
-def participant_stats(conn):
+def participant_stats(conn, order_by="answered DESC, p.pin ASC"):
     return conn.execute(
-        """
+        f"""
         WITH answered AS (
             SELECT participant_id, COUNT(*) AS answered
             FROM participant_answers
@@ -780,7 +780,7 @@ def participant_stats(conn):
         FROM participants p
         LEFT JOIN answered a ON a.participant_id = p.id
         LEFT JOIN tokens t ON t.participant_id = p.id
-        ORDER BY total_tokens DESC, answered DESC, p.pin ASC
+        ORDER BY {order_by}
         """
     ).fetchall()
 
