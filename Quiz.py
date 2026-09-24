@@ -545,7 +545,7 @@ def games():
 @app.route("/gold-users")
 def gold_users():
     with closing(db_conn()) as conn:
-        participants = participant_stats(conn, order_by="total_tokens DESC, answered DESC, p.pin ASC")
+        participants = participant_stats(conn, sort_mode="leaderboard")
 
     body = [
         "<h1>🥇 Gold Users</h1>",
@@ -755,7 +755,11 @@ def pin_form():
     return "<form method='post'><input name='pin' maxlength='20' minlength='4' required pattern='[A-Za-z0-9]+' placeholder='Enter your PIN'><button class='btn btn-ok' type='submit'>Start Quiz</button></form>"
 
 
-def participant_stats(conn, order_by="answered DESC, p.pin ASC"):
+def participant_stats(conn, sort_mode="admin"):
+    order_by = {
+        "admin": "answered DESC, p.pin ASC",
+        "leaderboard": "total_tokens DESC, answered DESC, p.pin ASC",
+    }.get(sort_mode, "answered DESC, p.pin ASC")
     return conn.execute(
         f"""
         WITH answered AS (
