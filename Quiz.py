@@ -2,6 +2,7 @@ from collections import Counter
 from datetime import datetime
 from html import escape
 import os
+import random
 import re
 import sqlite3
 
@@ -26,6 +27,29 @@ MAX_RESPONSE_LENGTH = 2000
 MIN_PIN_LENGTH = 4
 MAX_PIN_LENGTH = 20
 TOKEN_MILESTONE = 20
+
+DOPEWARS_START_CASH = 2000
+DOPEWARS_START_DEBT = 5500
+DOPEWARS_GAME_DAYS = 30
+DOPEWARS_CAPACITY = 100
+DOPEWARS_LOCATIONS = ["Bronx", "Ghetto", "Central Park", "Manhattan", "Coney Island", "Brooklyn"]
+DOPEWARS_PRICE_RANGES = {
+    "Weed": (80, 450),
+    "Acid": (600, 2600),
+    "Cocaine": (1000, 6500),
+    "Heroin": (2200, 11000),
+    "Meth": (500, 3800),
+    "Shrooms": (120, 900),
+}
+DOPEWARS_LOCATION_MULTIPLIER = {
+    "Bronx": 1.0,
+    "Ghetto": 0.9,
+    "Central Park": 1.05,
+    "Manhattan": 1.25,
+    "Coney Island": 0.95,
+    "Brooklyn": 1.1,
+}
+DOPEWARS_INTEREST_RATE = 0.1
 
 
 def strip_internal_round_labels(text):
@@ -343,6 +367,159 @@ def question_form(title, action, question=None, error=""):
         <button class='btn btn-ok' type='submit'>Save</button><a class='btn btn-sec' href='/admin'>Cancel</a></form>""")
 
 
+def dopewars_inventory():
+    return {drug: 0 for drug in DOPEWARS_PRICE_RANGES}
+
+
+def dopewars_prices(location):
+    multiplier = DOPEWARS_LOCATION_MULTIPLIER.get(location, 1.0)
+    prices = {}
+    for drug, (low, high) in DOPEWARS_PRICE_RANGES.items():
+        prices[drug] = max(1, int(random.randint(low, high) * multiplier))
+    return prices
+
+
+def new_dopewars_state():
+    location = DOPEWARS_LOCATIONS[0]
+    return {
+        "day": 1,
+        "cash": DOPEWARS_START_CASH,
+        "debt": DOPEWARS_START_DEBT,
+        "bank": 0,
+        "capacity": DOPEWARS_CAPACITY,
+        "location": location,
+        "inventory": dopewars_inventory(),
+        "prices": dopewars_prices(location),
+        "message": "Welcome to NYC. Build your fortune before day 30.",
+        "game_over": False,
+    }
+
+
+def dopewars_total_units(state):
+    return sum(max(0, int(quantity)) for quantity in state["inventory"].values())
+
+
+def dopewars_inventory_value(state):
+    return sum(int(state["inventory"].get(drug, 0)) * int(state["prices"].get(drug, 0)) for drug in DOPEWARS_PRICE_RANGES)
+
+
+def dopewars_final_score(state):
+    return int(state["cash"]) + int(state["bank"]) - int(state["debt"])
+
+
+def dopewars_end_summary(state, reason):
+    return f"{reason} Final score: ${dopewars_final_score(state)} (cash ${state['cash']} + bank ${state['bank']} - debt ${state['debt']})."
+
+
+def dopewars_bankrupt(state):
+    assets = int(state["cash"]) + int(state["bank"]) + dopewars_inventory_value(state)
+    return assets <= int(state["debt"]) and int(state["cash"]) <= 0 and int(state["bank"]) <= 0 and dopewars_total_units(state) == 0
+
+
+def parse_positive_int(value):
+    try:
+        amount = int(value)
+    except (TypeError, ValueError):
+        return 0
+    return max(0, amount)
+
+
+def dopewars_travel_event(state):
+    roll = random.random()
+    if roll < 0.12:
+        held = [drug for drug, qty in state["inventory"].items() if qty > 0]
+        if not held:
+            return "Police searched you, but found nothing."
+        drug = random.choice(held)
+        seized = max(1, state["inventory"][drug] // 2)
+        state["inventory"][drug] -= seized
+        return f"Police stop: they seized {seized} units of {drug}."
+    if roll < 0.24:
+        if state["cash"] <= 0:
+            return "A mugger tried, but you had no cash."
+        lost = max(50, int(state["cash"] * random.uniform(0.15, 0.35)))
+        lost = min(lost, state["cash"])
+        state["cash"] -= lost
+        return f"You were mugged and lost ${lost}."
+    if roll < 0.36:
+        found = random.randint(100, 900)
+        state["cash"] += found
+        return f"You found a hidden stash with ${found}."
+    if roll < 0.48:
+        drug = random.choice(list(DOPEWARS_PRICE_RANGES.keys()))
+        state["prices"][drug] = max(10, state["prices"][drug] // 3)
+        return f"Street deal: {drug} is insanely cheap today."
+    return ""
+
+
+def dopewars_render_body(state):
+    summary = "<div class='notice'>" + escape(state["message"]) + "</div>" if state.get("message") else ""
+    prices = "".join(f"<li>{escape(drug)}: ${state['prices'][drug]}</li>" for drug in DOPEWARS_PRICE_RANGES)
+    inventory_rows = "".join(
+        f"<tr><td>{escape(drug)}</td><td>{state['inventory'][drug]}</td><td>${state['prices'][drug]}</td></tr>"
+        for drug in DOPEWARS_PRICE_RANGES
+    )
+    options = "".join(f"<option value='{escape(location)}'>{escape(location)}</option>" for location in DOPEWARS_LOCATIONS)
+    actions = ""
+    if not state.get("game_over"):
+        actions = f"""
+            <h2>Actions</h2>
+            <form method='post' class='left'>
+                <input type='hidden' name='action' value='buy'>
+                <label>Buy</label><select name='drug'>{''.join(f"<option value='{escape(drug)}'>{escape(drug)}</option>" for drug in DOPEWARS_PRICE_RANGES)}</select>
+                <input type='number' min='1' name='quantity' placeholder='Quantity'>
+                <button class='btn btn-ok' type='submit'>Buy</button>
+            </form>
+            <form method='post' class='left'>
+                <input type='hidden' name='action' value='sell'>
+                <label>Sell</label><select name='drug'>{''.join(f"<option value='{escape(drug)}'>{escape(drug)}</option>" for drug in DOPEWARS_PRICE_RANGES)}</select>
+                <input type='number' min='1' name='quantity' placeholder='Quantity'>
+                <button class='btn btn-ok' type='submit'>Sell</button>
+            </form>
+            <form method='post' class='left'>
+                <input type='hidden' name='action' value='travel'>
+                <label>Travel</label><select name='location'>{options}</select>
+                <button class='btn btn-sec' type='submit'>Travel (next day)</button>
+            </form>
+            <form method='post' class='left'>
+                <input type='hidden' name='action' value='deposit'>
+                <label>Visit bank (deposit)</label><input type='number' min='1' name='amount' placeholder='Amount'>
+                <button class='btn btn-sec' type='submit'>Deposit</button>
+            </form>
+            <form method='post' class='left'>
+                <input type='hidden' name='action' value='withdraw'>
+                <label>Visit bank (withdraw)</label><input type='number' min='1' name='amount' placeholder='Amount'>
+                <button class='btn btn-sec' type='submit'>Withdraw</button>
+            </form>
+            <form method='post' class='left'>
+                <input type='hidden' name='action' value='pay_debt'>
+                <label>Pay debt</label><input type='number' min='1' name='amount' placeholder='Amount'>
+                <button class='btn btn-warn' type='submit'>Pay</button>
+            </form>
+            <form method='post' class='left'>
+                <input type='hidden' name='action' value='quit'>
+                <button class='btn btn-del' type='submit'>Quit Game</button>
+            </form>
+        """
+    return f"""
+        <h1>🕹 Dopewars</h1>
+        <p class='muted'>Day {state['day']} of {DOPEWARS_GAME_DAYS} · Location: {escape(state['location'])}</p>
+        <p>Cash: <strong>${state['cash']}</strong> · Bank: <strong>${state['bank']}</strong> · Debt: <strong>${state['debt']}</strong> · Space: <strong>{dopewars_total_units(state)}/{state['capacity']}</strong></p>
+        {summary}
+        <div class='question left'>
+            <h2>Market Prices</h2>
+            <ul>{prices}</ul>
+        </div>
+        <div class='question left'>
+            <h2>Inventory</h2>
+            <table class='table'><tr><th>Drug</th><th>Units</th><th>Price</th></tr>{inventory_rows}</table>
+        </div>
+        {actions}
+        <form method='post' action='/games/dopewars/reset'><button class='btn btn-sec' type='submit'>Reset Game</button></form>
+        <a class='btn btn-sec' href='/games'>Back to Games</a><a class='btn btn-sec' href='/'>Back to Menu</a>
+    """
+
+
 @app.route("/health")
 def health():
     return {"ok": True, "service": "CottonFlatBarQuiz"}, 200
@@ -350,7 +527,104 @@ def health():
 
 @app.route("/")
 def menu():
-    return page("Cotton Flat Bar Quiz", "<h1>🍺 Cotton Flat Bar Quiz</h1><p class='muted'>Funny sociology, questionable opinions, and community data.</p><a class='btn btn-ok' href='/quiz'>▶ Take Quiz</a><a class='btn btn-sec' href='/submit-question'>✍ Submit Question</a><a class='btn btn-sec' href='/answers'>📊 Community Answers</a><a class='btn btn-sec' href='/admin'>🛠 Admin</a>")
+    return page("Cotton Flat Bar Quiz", "<h1>🍺 Cotton Flat Bar Quiz</h1><p class='muted'>Funny sociology, questionable opinions, and community data.</p><a class='btn btn-ok' href='/quiz'>▶ Take Quiz</a><a class='btn btn-sec' href='/submit-question'>✍ Submit Question</a><a class='btn btn-sec' href='/answers'>📊 Community Answers</a><a class='btn btn-sec' href='/games'>🕹 Games</a><a class='btn btn-sec' href='/admin'>🛠 Admin</a>")
+
+
+@app.route("/games")
+def games():
+    body = "<h1>🕹 Games</h1><p class='muted'>Pick a game from the list below.</p><div class='question left'><h2>Dopewars</h2><p>Classic text-based street trading across NYC.</p><a class='btn btn-ok' href='/games/dopewars'>Play Dopewars</a></div><a class='btn btn-sec' href='/'>Back to Menu</a>"
+    return page("Games", body)
+
+
+@app.route("/games/dopewars", methods=["GET", "POST"])
+def dopewars():
+    state = session.get("dopewars_state")
+    if not isinstance(state, dict) or "cash" not in state:
+        state = new_dopewars_state()
+
+    if request.method == "POST" and not state.get("game_over"):
+        action = request.form.get("action", "")
+        state["message"] = ""
+        if action in {"buy", "sell"}:
+            drug = request.form.get("drug", "")
+            quantity = parse_positive_int(request.form.get("quantity"))
+            if drug not in DOPEWARS_PRICE_RANGES or quantity <= 0:
+                state["message"] = "Choose a drug and quantity first."
+            elif action == "buy":
+                price = state["prices"][drug]
+                available_space = max(0, state["capacity"] - dopewars_total_units(state))
+                affordable = state["cash"] // price if price > 0 else 0
+                purchased = min(quantity, available_space, affordable)
+                if purchased <= 0:
+                    state["message"] = "Not enough cash or coat space."
+                else:
+                    state["inventory"][drug] += purchased
+                    spent = purchased * price
+                    state["cash"] -= spent
+                    state["message"] = f"Bought {purchased} units of {drug} for ${spent}."
+            else:
+                held = state["inventory"].get(drug, 0)
+                sold = min(quantity, held)
+                if sold <= 0:
+                    state["message"] = f"You do not have any {drug} to sell."
+                else:
+                    earned = sold * state["prices"][drug]
+                    state["inventory"][drug] -= sold
+                    state["cash"] += earned
+                    state["message"] = f"Sold {sold} units of {drug} for ${earned}."
+        elif action == "travel":
+            destination = request.form.get("location", "")
+            if destination not in DOPEWARS_LOCATIONS:
+                state["message"] = "Pick a destination."
+            else:
+                state["location"] = destination
+                state["day"] += 1
+                state["debt"] = int(state["debt"] * (1 + DOPEWARS_INTEREST_RATE))
+                state["prices"] = dopewars_prices(destination)
+                event = dopewars_travel_event(state)
+                state["message"] = f"Traveled to {destination}. Loan shark interest increased your debt."
+                if event:
+                    state["message"] += " " + event
+        elif action in {"deposit", "withdraw", "pay_debt"}:
+            amount = parse_positive_int(request.form.get("amount"))
+            if amount <= 0:
+                state["message"] = "Enter an amount greater than zero."
+            elif action == "deposit":
+                moved = min(amount, state["cash"])
+                state["cash"] -= moved
+                state["bank"] += moved
+                state["message"] = f"Deposited ${moved} in the bank."
+            elif action == "withdraw":
+                moved = min(amount, state["bank"])
+                state["bank"] -= moved
+                state["cash"] += moved
+                state["message"] = f"Withdrew ${moved} from the bank."
+            else:
+                paid = min(amount, state["cash"], state["debt"])
+                state["cash"] -= paid
+                state["debt"] -= paid
+                state["message"] = f"Paid ${paid} to the loan shark."
+        elif action == "quit":
+            state["game_over"] = True
+            state["message"] = dopewars_end_summary(state, "You quit the run.")
+        else:
+            state["message"] = "Unknown action."
+
+        if state["day"] >= DOPEWARS_GAME_DAYS and not state.get("game_over"):
+            state["game_over"] = True
+            state["message"] = dopewars_end_summary(state, "Day 30 reached.")
+        elif dopewars_bankrupt(state) and not state.get("game_over"):
+            state["game_over"] = True
+            state["message"] = dopewars_end_summary(state, "You went bankrupt.")
+
+    session["dopewars_state"] = state
+    return page("Dopewars", dopewars_render_body(state))
+
+
+@app.route("/games/dopewars/reset", methods=["POST"])
+def dopewars_reset():
+    session["dopewars_state"] = new_dopewars_state()
+    return redirect(url_for("dopewars"))
 
 
 @app.route("/quiz", methods=["GET", "POST"])
