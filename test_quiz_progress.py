@@ -96,6 +96,26 @@ class QuizProgressTestCase(unittest.TestCase):
             session["is_admin"] = True
         return client
 
+    def set_dopewars_pin(self, client=None, pin="dope1"):
+        client = client or self.client
+        with client.session_transaction() as session:
+            session["participant_pin"] = pin.upper()
+        return client
+
+    def dopewars_top_score(self, pin):
+        conn = Quiz.db_conn()
+        try:
+            row = conn.execute(
+                """SELECT ds.top_score
+                   FROM dopewars_scores ds
+                   JOIN participants p ON p.id = ds.participant_id
+                   WHERE p.pin = ?""",
+                (pin.upper(),),
+            ).fetchone()
+            return row[0] if row else None
+        finally:
+            conn.close()
+
     def test_new_pin_starts_from_first_question(self):
         first_question = self.approved_questions()[0]["text"]
 
@@ -220,12 +240,13 @@ class QuizProgressTestCase(unittest.TestCase):
         self.assertIn("DELETED_SEED_QUESTION_NUMBERS = [5]", self.source_path.read_text(encoding="utf-8"))
 
     def test_games_page_lists_dopewars_link(self):
-        response = self.client.get("/games")
+        response = self.client.get("/games", follow_redirects=True)
         body = response.get_data(as_text=True)
 
         self.assertEqual(response.status_code, 200)
+        self.assertIn("Cotton Flat Bar Quiz", body)
         self.assertIn("/games/dopewars", body)
-        self.assertIn("Back to Menu", body)
+        self.assertIn("High Scores", body)
 
     def test_gold_users_page_lists_participants_without_double_counting_tokens(self):
         leaderboard_client = Quiz.app.test_client()
@@ -259,10 +280,10 @@ class QuizProgressTestCase(unittest.TestCase):
         self.assertIn("<td>ADMIN20</td><td>20</td><td>1</td><td>0</td><td>0/20</td>", body)
 
     def test_dopewars_new_game_initializes_starting_stats(self):
+        self.set_dopewars_pin()
         response = self.client.get("/games/dopewars")
         self.assertEqual(response.status_code, 200)
         body = response.get_data(as_text=True)
-        self.assertIn("Back to Games", body)
         self.assertIn("Back to Menu", body)
         self.assertIn("/games/dopewars/reset", body)
 
@@ -275,6 +296,7 @@ class QuizProgressTestCase(unittest.TestCase):
         self.assertEqual(state["capacity"], 100)
 
     def test_dopewars_buy_and_sell_updates_cash_inventory_and_capacity(self):
+        self.set_dopewars_pin()
         with self.client.session_transaction() as session:
             session["dopewars_state"] = {
                 "day": 1,
@@ -306,6 +328,7 @@ class QuizProgressTestCase(unittest.TestCase):
             self.assertEqual(state["cash"], 14000)
 
     def test_dopewars_travel_advances_day_and_interest(self):
+        self.set_dopewars_pin()
         with self.client.session_transaction() as session:
             session["dopewars_state"] = {
                 "day": 1,
@@ -330,6 +353,7 @@ class QuizProgressTestCase(unittest.TestCase):
             self.assertEqual(state["debt"], 6050)
 
     def test_dopewars_ends_on_day_30_with_final_score(self):
+        self.set_dopewars_pin()
         with self.client.session_transaction() as session:
             session["dopewars_state"] = {
                 "day": 29,
@@ -355,6 +379,7 @@ class QuizProgressTestCase(unittest.TestCase):
             self.assertTrue(session["dopewars_state"]["game_over"])
 
     def test_dopewars_reset_restores_initial_state(self):
+        self.set_dopewars_pin()
         with self.client.session_transaction() as session:
             session["dopewars_state"] = {
                 "day": 10,
@@ -379,6 +404,53 @@ class QuizProgressTestCase(unittest.TestCase):
             self.assertEqual(state["debt"], 5500)
             self.assertEqual(sum(state["inventory"].values()), 0)
             self.assertFalse(state["game_over"])
+
+    def test_dopewars_requires_pin_before_play(self):
+        response = self.client.get("/games/dopewars")
+        body = response.get_data(as_text=True)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("Enter your PIN", body)
+        self.assertIn("Play Dopewars", body)
+
+    def test_dopewars_quit_saves_best_score_and_reset_does_not_overwrite(self):
+        self.set_dopewars_pin(pin="score1")
+        with self.client.session_transaction() as session:
+            session["dopewars_state"] = {
+                "day": 5,
+                "cash": 9000,
+                "debt": 1000,
+                "bank": 2000,
+                "capacity": 100,
+                "location": "Bronx",
+                "inventory": {drug: 0 for drug in Quiz.DOPEWARS_PRICE_RANGES},
+                "prices": {drug: 100 for drug in Quiz.DOPEWARS_PRICE_RANGES},
+                "message": "",
+                "game_over": False,
+            }
+        self.client.post("/games/dopewars", data={"action": "quit"}, follow_redirects=True)
+        self.assertEqual(self.dopewars_top_score("score1"), 10000)
+
+        self.client.post("/games/dopewars/reset", follow_redirects=True)
+        with self.client.session_transaction() as session:
+            session["dopewars_state"] = {
+                "day": 5,
+                "cash": 1200,
+                "debt": 2000,
+                "bank": 0,
+                "capacity": 100,
+                "location": "Bronx",
+                "inventory": {drug: 0 for drug in Quiz.DOPEWARS_PRICE_RANGES},
+                "prices": {drug: 100 for drug in Quiz.DOPEWARS_PRICE_RANGES},
+                "message": "",
+                "game_over": False,
+            }
+        self.client.post("/games/dopewars", data={"action": "quit"}, follow_redirects=True)
+        self.assertEqual(self.dopewars_top_score("score1"), 10000)
+
+        menu = self.client.get("/").get_data(as_text=True)
+        self.assertIn("SCORE1", menu)
+        self.assertIn("$10000", menu)
 
 
 if __name__ == "__main__":
