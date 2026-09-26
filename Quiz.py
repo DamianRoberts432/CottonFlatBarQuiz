@@ -240,6 +240,13 @@ def init_db():
             created_at TEXT NOT NULL, redeemed_at TEXT, FOREIGN KEY(participant_id) REFERENCES participants(id) ON DELETE CASCADE,
             UNIQUE(participant_id, milestone)
         );
+        CREATE TABLE IF NOT EXISTS dopewars_scores (
+            participant_id INTEGER PRIMARY KEY,
+            top_score INTEGER NOT NULL,
+            achieved_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY(participant_id) REFERENCES participants(id) ON DELETE CASCADE
+        );
     """)
     ensure_column(conn, "questions", "seed_key", "TEXT")
     ensure_column(conn, "questions", "question_number", "INTEGER")
@@ -250,6 +257,7 @@ def init_db():
     conn.execute("CREATE INDEX IF NOT EXISTS idx_responses_question_id ON text_responses(question_id)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_participant_answers_participant ON participant_answers(participant_id)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_tokens_participant ON drink_tokens(participant_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_dopewars_scores_top_score ON dopewars_scores(top_score DESC, achieved_at ASC)")
 
     existing_count = conn.execute("SELECT COUNT(*) FROM questions").fetchone()[0]
     if existing_count == 0:
@@ -290,7 +298,7 @@ def init_db():
 
 BASE_STYLE = """
 <style>
-*{box-sizing:border-box}body{font-family:Arial,sans-serif;background:#0f1115;color:#f4f7ff;padding:20px;margin:0;min-height:100vh;display:flex;justify-content:center}.card{width:min(900px,100%);background:#171b22;border:1px solid #2a3140;border-radius:12px;padding:20px;box-shadow:0 10px 30px rgba(0,0,0,.25)}.left{display:flex;flex-direction:column;gap:12px}.muted{color:#a7b0c0}.error{background:#4a1b1b;border:1px solid #6d2f2f;padding:10px;border-radius:8px;color:#ffd1d1}.notice{background:#182d1e;border:1px solid #2b4e34;padding:10px;border-radius:8px;color:#d7f9d1}.btn{display:inline-block;padding:10px 18px;border-radius:8px;text-decoration:none;color:#fff;font-weight:700;cursor:pointer;border:none;margin:6px 0}.btn-ok{background:#2f7cf6}.btn-sec{background:#2a3140}.btn-warn{background:#d28a00}.btn-del{background:#b62d2d}.small{padding:6px 12px;font-size:12px}.question{background:#111821;border:1px solid #2a3140;border-radius:10px;padding:14px}.choice{display:flex;align-items:center;gap:8px;background:#161d2a;padding:10px;border-radius:8px}.resp{background:#121822;border:1px solid #2a3140;padding:10px;border-radius:8px;margin:5px 0}.bar{width:100%;height:12px;background:#1e2430;border-radius:999px;overflow:hidden;margin:8px 0}.fill{height:100%;background:#2f7cf6}.admin-row{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:10px}textarea,input,select{width:100%;padding:10px;border-radius:8px;border:1px solid #485264;background:#0d1219;color:#f4f7ff}.table{width:100%;border-collapse:collapse}th,td{padding:8px 10px;border-bottom:1px solid #2a3140;text-align:left}h1,h2,h3{margin:0 0 12px}.form{display:flex;flex-direction:column;gap:12px}input[type='radio']{width:auto}a{color:#9ac1ff}
+*{box-sizing:border-box}body{font-family:Arial,sans-serif;background:#0f1115;color:#f4f7ff;padding:20px;margin:0;min-height:100vh;display:flex;justify-content:center}.card{width:min(900px,100%);background:#171b22;border:1px solid #2a3140;border-radius:12px;padding:20px;box-shadow:0 10px 30px rgba(0,0,0,.25)}.left{display:flex;flex-direction:column;gap:12px}.muted{color:#a7b0c0}.error{background:#4a1b1b;border:1px solid #6d2f2f;padding:10px;border-radius:8px;color:#ffd1d1}.notice{background:#182d1e;border:1px solid #2b4e34;padding:10px;border-radius:8px;color:#d7f9d1}.btn{display:inline-block;padding:10px 18px;border-radius:8px;text-decoration:none;color:#fff;font-weight:700;cursor:pointer;border:none;margin:6px 0}.btn-ok{background:#2f7cf6}.btn-sec{background:#2a3140}.btn-warn{background:#d28a00}.btn-del{background:#b62d2d}.btn-buy{background:#c83333}.btn-sell{background:#2f7cf6}.btn-travel{background:#e0b100;color:#171b22}.btn-bank{background:#1f9d5a}.btn-debt{background:#e08400}.btn-reset{background:#c52ecf}.btn-quit{background:#10a9d6}.small{padding:6px 12px;font-size:12px}.question{background:#111821;border:1px solid #2a3140;border-radius:10px;padding:14px}.choice{display:flex;align-items:center;gap:8px;background:#161d2a;padding:10px;border-radius:8px}.resp{background:#121822;border:1px solid #2a3140;padding:10px;border-radius:8px;margin:5px 0}.bar{width:100%;height:12px;background:#1e2430;border-radius:999px;overflow:hidden;margin:8px 0}.fill{height:100%;background:#2f7cf6}.admin-row{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:10px}.bank-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px}textarea,input,select{width:100%;padding:10px;border-radius:8px;border:1px solid #485264;background:#0d1219;color:#f4f7ff}.table{width:100%;border-collapse:collapse}th,td{padding:8px 10px;border-bottom:1px solid #2a3140;text-align:left}h1,h2,h3{margin:0 0 12px}.form{display:flex;flex-direction:column;gap:12px}input[type='radio']{width:auto}a{color:#9ac1ff}
 </style>
 """
 
@@ -417,6 +425,46 @@ def dopewars_end_summary(state, reason):
     return f"{reason} Final score: ${dopewars_final_score(state)} (cash ${state['cash']} + bank ${state['bank']} - debt ${state['debt']})."
 
 
+def dopewars_save_high_score(participant_id, state):
+    if not participant_id:
+        return
+    score = dopewars_final_score(state)
+    timestamp = now()
+    with closing(db_conn()) as conn:
+        conn.execute(
+            """
+            INSERT INTO dopewars_scores (participant_id, top_score, achieved_at, updated_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(participant_id) DO UPDATE SET
+                top_score = excluded.top_score,
+                achieved_at = excluded.achieved_at,
+                updated_at = excluded.updated_at
+            WHERE excluded.top_score > dopewars_scores.top_score
+            """,
+            (participant_id, score, timestamp, timestamp),
+        )
+        conn.commit()
+
+
+def dopewars_finish_run(state, participant_id, reason):
+    state["game_over"] = True
+    state["message"] = dopewars_end_summary(state, reason)
+    dopewars_save_high_score(participant_id, state)
+
+
+def dopewars_leaderboard(conn, limit=10):
+    return conn.execute(
+        """
+        SELECT p.pin, ds.top_score, ds.achieved_at
+        FROM dopewars_scores ds
+        JOIN participants p ON p.id = ds.participant_id
+        ORDER BY ds.top_score DESC, ds.achieved_at ASC, p.pin ASC
+        LIMIT ?
+        """,
+        (limit,),
+    ).fetchall()
+
+
 def dopewars_bankrupt(state):
     assets = int(state["cash"]) + int(state["bank"]) + dopewars_inventory_value(state)
     return assets <= int(state["debt"]) and int(state["cash"]) <= 0 and int(state["bank"]) <= 0 and dopewars_total_units(state) == 0
@@ -474,37 +522,42 @@ def dopewars_render_body(state):
                 <input type='hidden' name='action' value='buy'>
                 <label>Buy</label><select name='drug'>{''.join(f"<option value='{escape(drug)}'>{escape(drug)}</option>" for drug in DOPEWARS_PRICE_RANGES)}</select>
                 <input type='number' min='1' name='quantity' placeholder='Quantity'>
-                <button class='btn btn-ok' type='submit'>Buy</button>
+                <button class='btn btn-buy' type='submit'>Buy</button>
             </form>
             <form method='post' class='left'>
                 <input type='hidden' name='action' value='sell'>
                 <label>Sell</label><select name='drug'>{''.join(f"<option value='{escape(drug)}'>{escape(drug)}</option>" for drug in DOPEWARS_PRICE_RANGES)}</select>
                 <input type='number' min='1' name='quantity' placeholder='Quantity'>
-                <button class='btn btn-ok' type='submit'>Sell</button>
+                <button class='btn btn-sell' type='submit'>Sell</button>
             </form>
             <form method='post' class='left'>
                 <input type='hidden' name='action' value='travel'>
                 <label>Travel</label><select name='location'>{options}</select>
-                <button class='btn btn-sec' type='submit'>Travel (next day)</button>
+                <button class='btn btn-travel' type='submit'>Travel (next day)</button>
             </form>
-            <form method='post' class='left'>
-                <input type='hidden' name='action' value='deposit'>
-                <label>Visit bank (deposit)</label><input type='number' min='1' name='amount' placeholder='Amount'>
-                <button class='btn btn-sec' type='submit'>Deposit</button>
-            </form>
-            <form method='post' class='left'>
-                <input type='hidden' name='action' value='withdraw'>
-                <label>Visit bank (withdraw)</label><input type='number' min='1' name='amount' placeholder='Amount'>
-                <button class='btn btn-sec' type='submit'>Withdraw</button>
-            </form>
+            <div class='question left'>
+                <h3>🏦 Bank</h3>
+                <div class='bank-grid'>
+                    <form method='post' class='left'>
+                        <input type='hidden' name='action' value='deposit'>
+                        <label>Deposit</label><input type='number' min='1' name='amount' placeholder='Amount'>
+                        <button class='btn btn-bank' type='submit'>Deposit</button>
+                    </form>
+                    <form method='post' class='left'>
+                        <input type='hidden' name='action' value='withdraw'>
+                        <label>Withdraw</label><input type='number' min='1' name='amount' placeholder='Amount'>
+                        <button class='btn btn-bank' type='submit'>Withdraw</button>
+                    </form>
+                </div>
+            </div>
             <form method='post' class='left'>
                 <input type='hidden' name='action' value='pay_debt'>
-                <label>Pay debt</label><input type='number' min='1' name='amount' placeholder='Amount'>
-                <button class='btn btn-warn' type='submit'>Pay</button>
+                <label>Pay loan shark</label><input type='number' min='1' name='amount' placeholder='Amount'>
+                <button class='btn btn-debt' type='submit'>Pay Loan Shark</button>
             </form>
             <form method='post' class='left'>
                 <input type='hidden' name='action' value='quit'>
-                <button class='btn btn-del' type='submit'>Quit Game</button>
+                <button class='btn btn-quit' type='submit'>Quit Game</button>
             </form>
         """
     return f"""
@@ -521,8 +574,8 @@ def dopewars_render_body(state):
             <table class='table'><tr><th>Drug</th><th>Units</th><th>Price</th></tr>{inventory_rows}</table>
         </div>
         {actions}
-        <form method='post' action='/games/dopewars/reset'><button class='btn btn-sec' type='submit'>Reset Game</button></form>
-        <a class='btn btn-sec' href='/games'>Back to Games</a><a class='btn btn-sec' href='/'>Back to Menu</a>
+        <form method='post' action='/games/dopewars/reset'><button class='btn btn-reset' type='submit'>Reset Game</button></form>
+        <a class='btn btn-sec' href='/'>Back to Menu</a>
     """
 
 
@@ -533,13 +586,35 @@ def health():
 
 @app.route("/")
 def menu():
-    return page("Cotton Flat Bar Quiz", "<h1>🍺 Cotton Flat Bar Quiz</h1><p class='muted'>Funny sociology, questionable opinions, and community data.</p><a class='btn btn-ok' href='/quiz'>▶ Take Quiz</a><a class='btn btn-sec' href='/submit-question'>✍ Submit Question</a><a class='btn btn-sec' href='/answers'>📊 Community Answers</a><a class='btn btn-sec' href='/gold-users'>🥇 Gold Users</a><a class='btn btn-sec' href='/games'>🕹 Games</a><a class='btn btn-sec' href='/admin'>🛠 Admin</a>")
+    with closing(db_conn()) as conn:
+        dopewars_scores = dopewars_leaderboard(conn)
+    body = [
+        "<h1>🍺 Cotton Flat Bar Quiz</h1>",
+        "<p class='muted'>Funny sociology, questionable opinions, and community data.</p>",
+        "<a class='btn btn-ok' href='/quiz'>▶ Take Quiz</a>",
+        "<a class='btn btn-sec' href='/submit-question'>✍ Submit Question</a>",
+        "<a class='btn btn-sec' href='/answers'>📊 Community Answers</a>",
+        "<a class='btn btn-sec' href='/gold-users'>🥇 Gold Users</a>",
+        "<a class='btn btn-sec' href='/games/dopewars'>🕹 Games</a>",
+        "<a class='btn btn-sec' href='/admin'>🛠 Admin</a>",
+        "<div class='question left'><h2>🕹 Dopewars</h2><p>Classic text-based street trading across NYC.</p><a class='btn btn-ok' href='/games/dopewars'>Play Dopewars</a><h3>High Scores</h3>",
+    ]
+    if dopewars_scores:
+        body.append("<table class='table'><tr><th>#</th><th>PIN</th><th>Top Score</th><th>Date</th></tr>")
+        for index, row in enumerate(dopewars_scores, 1):
+            body.append(
+                f"<tr><td>{index}</td><td>{escape(row['pin'])}</td><td>${row['top_score']}</td><td>{escape((row['achieved_at'] or '').replace('T', ' '))}</td></tr>"
+            )
+        body.append("</table>")
+    else:
+        body.append("<p class='muted'>No Dopewars scores yet. Be the first to set one.</p>")
+    body.append("</div>")
+    return page("Cotton Flat Bar Quiz", "".join(body))
 
 
 @app.route("/games")
 def games():
-    body = "<h1>🕹 Games</h1><p class='muted'>Pick a game from the list below.</p><div class='question left'><h2>Dopewars</h2><p>Classic text-based street trading across NYC.</p><a class='btn btn-ok' href='/games/dopewars'>Play Dopewars</a></div><a class='btn btn-sec' href='/'>Back to Menu</a>"
-    return page("Games", body)
+    return redirect(url_for("menu"))
 
 
 @app.route("/gold-users")
@@ -569,6 +644,29 @@ def gold_users():
 
 @app.route("/games/dopewars", methods=["GET", "POST"])
 def dopewars():
+    if request.method == "POST" and request.form.get("action") == "set_pin":
+        pin = normalize_pin(request.form.get("pin"))
+        if len(pin) < MIN_PIN_LENGTH:
+            body = "<h1>Enter your PIN</h1><p class='muted'>Use your quiz PIN so your Dopewars high score can be saved to your profile.</p><div class='error'>Use at least 4 letters or numbers.</div>" + pin_form(url_for("dopewars"), "Play Dopewars", "<input type='hidden' name='action' value='set_pin'>")
+            return page("Enter PIN", body)
+        with closing(db_conn()) as conn:
+            participant_id = participant_for_pin(conn, pin)
+            conn.commit()
+        session["participant_pin"] = pin
+        session["participant_id"] = participant_id
+        return redirect(url_for("dopewars"))
+
+    if not session.get("participant_pin"):
+        body = "<h1>Enter your PIN</h1><p class='muted'>Use your quiz PIN so your Dopewars high score can be saved to your profile.</p>" + pin_form(url_for("dopewars"), "Play Dopewars", "<input type='hidden' name='action' value='set_pin'>")
+        return page("Enter PIN", body)
+
+    participant_id = session.get("participant_id")
+    if not participant_id:
+        with closing(db_conn()) as conn:
+            participant_id = participant_for_pin(conn, session["participant_pin"])
+            conn.commit()
+        session["participant_id"] = participant_id
+
     state = session.get("dopewars_state")
     if not isinstance(state, dict) or "cash" not in state:
         state = new_dopewars_state()
@@ -636,17 +734,14 @@ def dopewars():
                 state["debt"] -= paid
                 state["message"] = f"Paid ${paid} to the loan shark."
         elif action == "quit":
-            state["game_over"] = True
-            state["message"] = dopewars_end_summary(state, "You quit the run.")
+            dopewars_finish_run(state, participant_id, "You quit the run.")
         else:
             state["message"] = "Unknown action."
 
         if state["day"] >= DOPEWARS_GAME_DAYS and not state.get("game_over"):
-            state["game_over"] = True
-            state["message"] = dopewars_end_summary(state, "Day 30 reached.")
+            dopewars_finish_run(state, participant_id, "Day 30 reached.")
         elif dopewars_bankrupt(state) and not state.get("game_over"):
-            state["game_over"] = True
-            state["message"] = dopewars_end_summary(state, "You went bankrupt.")
+            dopewars_finish_run(state, participant_id, "You went bankrupt.")
 
     session["dopewars_state"] = state
     return page("Dopewars", dopewars_render_body(state))
@@ -751,8 +846,9 @@ def quiz():
     return page("Take Quiz", body)
 
 
-def pin_form():
-    return "<form method='post'><input name='pin' maxlength='20' minlength='4' required pattern='[A-Za-z0-9]+' placeholder='Enter your PIN'><button class='btn btn-ok' type='submit'>Start Quiz</button></form>"
+def pin_form(action="", button_label="Start Quiz", hidden_fields=""):
+    action_attr = f" action='{escape(action)}'" if action else ""
+    return f"<form method='post'{action_attr}>{hidden_fields}<input name='pin' maxlength='20' minlength='4' required pattern='[A-Za-z0-9]+' placeholder='Enter your PIN'><button class='btn btn-ok' type='submit'>{escape(button_label)}</button></form>"
 
 
 def participant_stats(conn, sort_mode="admin"):
