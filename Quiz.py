@@ -370,7 +370,7 @@ def complete_quiz_page(message):
 
 
 def question_form(title, action, question=None, error=""):
-    question = question or {}
+    question = dict(question) if question else {}
     question_type = "open" if question.get("is_open_text", 1) else "choice"
     fields = [escape(strip_internal_round_labels(question.get(f"op{i}", "") or "")) for i in range(1, 5)]
     return page(title, f"""

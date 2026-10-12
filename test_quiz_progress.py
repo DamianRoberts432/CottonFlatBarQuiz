@@ -239,6 +239,33 @@ class QuizProgressTestCase(unittest.TestCase):
         self.assertEqual(Quiz.DELETED_SEED_QUESTION_NUMBERS, [5])
         self.assertIn("DELETED_SEED_QUESTION_NUMBERS = [5]", self.source_path.read_text(encoding="utf-8"))
 
+    def test_admin_can_open_and_save_question_edit(self):
+        self.make_admin()
+        self.assertEqual(self.client.get("/admin/edit-question/1").status_code, 200)
+
+        response = self.client.post("/admin/edit-question/1", data={
+            "text": "Edited question?", "question_type": "choice",
+            "op1": "Yes", "op2": "No", "op3": "", "op4": "",
+        })
+        self.assertEqual(response.status_code, 302)
+
+        conn = Quiz.db_conn()
+        try:
+            row = conn.execute("SELECT text, is_open_text, op1, op2 FROM questions WHERE id = 1").fetchone()
+        finally:
+            conn.close()
+        self.assertEqual(tuple(row), ("Edited question?", 0, "Yes", "No"))
+
+    def test_admin_can_open_suggestion_edit(self):
+        self.make_admin()
+        conn = Quiz.db_conn()
+        try:
+            suggestion_id = conn.execute("INSERT INTO suggestions (text, created_at) VALUES ('Idea?', ?)", (Quiz.now(),)).lastrowid
+            conn.commit()
+        finally:
+            conn.close()
+        self.assertEqual(self.client.get(f"/admin/edit-suggestion/{suggestion_id}").status_code, 200)
+
     def test_games_page_lists_dopewars_link(self):
         response = self.client.get("/games", follow_redirects=True)
         body = response.get_data(as_text=True)
