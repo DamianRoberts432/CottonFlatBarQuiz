@@ -32,7 +32,7 @@ const bool ENABLE_UPSTREAM_ROUTING = false;
 const IPAddress PI_IP(192, 168, 4, 4);
 const uint16_t PI_PORT = 5000;
 const byte DNS_PORT = 53;
-const unsigned long PI_HEALTH_TIMEOUT_MS = 1200;
+const unsigned long PI_HEALTH_TIMEOUT_MS = 600;
 const unsigned long PI_HEALTH_CACHE_MS = 5000;
 
 const IPAddress AP_IP(192, 168, 4, 1);
