@@ -612,6 +612,52 @@ def menu():
     return page("Cotton Flat Bar Quiz", "".join(body))
 
 
+TV_PAGE = """<!doctype html><html><head><meta charset='utf-8'><title>Cotton Flat Bar Quiz TV</title>
+<style>
+html,body{margin:0;height:100%;background:#0f1115;color:#f4f7ff;font-family:Arial,sans-serif;cursor:none;overflow:hidden}
+#app{height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:3vh 4vw;box-sizing:border-box;text-align:center}
+h1{font-size:6vh;margin:0 0 3vh}h2{font-size:4.5vh;margin:0 0 2vh}.muted{color:#a7b0c0;font-size:3vh}
+table{border-collapse:collapse;font-size:4vh;min-width:60vw}td,th{padding:1.2vh 2vw;border-bottom:1px solid #2a3140;text-align:left}
+th{color:#a7b0c0;font-size:2.8vh}td.score{color:#80efad;font-weight:bold;text-align:right}tr.first td{color:#ffd54a}
+</style></head><body><div id='app'><h1>🍺 Cotton Flat Bar Quiz</h1></div>
+<script>
+const app = document.getElementById('app');
+function esc(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
+function renderScores(st){
+  let h = "<h1>🕹 Dopewars High Scores</h1>";
+  if(!st.scores.length){h += "<p class='muted'>No scores yet. Join the Wi-Fi <b>Cotton Flat Bar Quiz</b> and play Dopewars!</p>";}
+  else{
+    h += "<table><tr><th>#</th><th>Player</th><th style='text-align:right'>Top Score</th></tr>";
+    st.scores.forEach((r,i)=>{h += `<tr class='${i==0?"first":""}'><td>${i+1}</td><td>${esc(r.name)}</td><td class='score'>$${Number(r.score).toLocaleString()}</td></tr>`;});
+    h += "</table>";
+  }
+  h += "<p class='muted'>Join the Wi-Fi “Cotton Flat Bar Quiz” to play</p>";
+  return h;
+}
+function render(st){ app.innerHTML = renderScores(st); }
+async function poll(){
+  try{ const r = await fetch('/tv/state',{cache:'no-store'}); render(await r.json()); }catch(e){}
+  setTimeout(poll, 3000);
+}
+poll();
+</script></body></html>"""
+
+
+def tv_scores(conn):
+    return [{"name": row["pin"], "score": row["top_score"]} for row in dopewars_leaderboard(conn)]
+
+
+@app.route("/tv")
+def tv():
+    return TV_PAGE
+
+
+@app.route("/tv/state")
+def tv_state():
+    with closing(db_conn()) as conn:
+        return {"mode": "scores", "scores": tv_scores(conn)}
+
+
 @app.route("/games")
 def games():
     return redirect(url_for("menu"))
@@ -969,7 +1015,7 @@ def admin():
     for question in questions:
         kind = "Free write" if question["is_open_text"] else "Multiple choice"
         body += f"<div class='question left'><strong>{escape(strip_internal_round_labels(question['text']))}</strong><p class='muted'>{kind} · Question {question['question_number']} · ID {question['id']}</p><div class='admin-row'><a class='btn btn-warn small' href='/admin/edit-question/{question['id']}'>Edit</a><form method='post' action='/admin/delete-question-number/{question['question_number']}' onsubmit=\"return confirm('Delete this question and all answers?');\"><button class='btn btn-del small'>Delete</button></form></div></div>"
-    body += "<a class='btn btn-sec' href='/gold-users'>View Gold Users</a><a class='btn btn-sec' href='/admin/logout'>Log Out</a><a class='btn btn-sec' href='/'>Back to Menu</a>"
+    body += "<a class='btn btn-sec' href='/tv'>TV Screen</a><a class='btn btn-sec' href='/gold-users'>View Gold Users</a><a class='btn btn-sec' href='/admin/logout'>Log Out</a><a class='btn btn-sec' href='/'>Back to Menu</a>"
     return page("Host Admin", body)
 
 

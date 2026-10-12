@@ -266,6 +266,14 @@ class QuizProgressTestCase(unittest.TestCase):
             conn.close()
         self.assertEqual(self.client.get(f"/admin/edit-suggestion/{suggestion_id}").status_code, 200)
 
+    def test_tv_shows_dopewars_scores(self):
+        self.set_dopewars_pin(pin="tv01")
+        self.client.post("/games/dopewars", data={"action": "quit"})
+        self.assertEqual(self.client.get("/tv").status_code, 200)
+        state = self.client.get("/tv/state").get_json()
+        self.assertEqual(state["mode"], "scores")
+        self.assertEqual(state["scores"][0]["name"], "TV01")
+
     def test_games_page_lists_dopewars_link(self):
         response = self.client.get("/games", follow_redirects=True)
         body = response.get_data(as_text=True)
