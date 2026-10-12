@@ -47,6 +47,28 @@ unsigned long lastPiHealthCheck = 0;
 bool piHealthy = false;
 bool piHealthChecked = false;
 
+// Phones that tapped a menu button. Their "is there internet?" checks get a
+// success reply so the sign-in popup turns into "Done" and the phone stays on
+// the quiz Wi-Fi; everyone else is redirected to the menu so the popup opens.
+const uint8_t MAX_ACCEPTED_CLIENTS = 24;
+IPAddress acceptedClients[MAX_ACCEPTED_CLIENTS];
+uint8_t acceptedCount = 0;
+uint8_t acceptedNext = 0;
+
+bool isAcceptedClient(const IPAddress& ip) {
+  for (uint8_t i = 0; i < acceptedCount; i++) {
+    if (acceptedClients[i] == ip) return true;
+  }
+  return false;
+}
+
+void acceptClient(const IPAddress& ip) {
+  if (isAcceptedClient(ip)) return;
+  acceptedClients[acceptedNext] = ip;
+  acceptedNext = (acceptedNext + 1) % MAX_ACCEPTED_CLIENTS;
+  if (acceptedCount < MAX_ACCEPTED_CLIENTS) acceptedCount++;
+}
+
 String piUrl(const char* path) {
   return String("http://") + PI_IP.toString() + ":" + String(PI_PORT) + path;
 }
@@ -80,7 +102,7 @@ String menuButton(const char* path, const char* label, const char* extraClass = 
     classes += " ";
     classes += extraClass;
   }
-  return "<a class='" + classes + "' href='" + piUrl(path) + "'>" + label + "</a>";
+  return "<a class='" + classes + "' href='/go?to=" + String(path) + "'>" + label + "</a>";
 }
 
 void handleMenu() {
@@ -101,9 +123,43 @@ void handleMenu() {
   server.send(200, "text/html", html);
 }
 
+void redirectToMenu() {
+  server.sendHeader("Location", String("http://") + AP_IP.toString() + "/");
+  server.sendHeader("Cache-Control", "no-cache, no-store");
+  server.send(302, "text/html", "");
+}
+
+void sendOnlineReply() {
+  String uri = server.uri();
+  String host = server.hostHeader();
+  if (uri == "/generate_204" || uri == "/gen_204") {
+    server.send(204, "text/plain", "");
+  } else if (uri == "/hotspot-detect.html" || host.indexOf("apple.com") >= 0 || host.indexOf("appleiphonecell.com") >= 0) {
+    server.send(200, "text/html", "<HTML><HEAD><TITLE>Success</TITLE></HEAD><BODY>Success</BODY></HTML>");
+  } else if (uri == "/connecttest.txt") {
+    server.send(200, "text/plain", "Microsoft Connect Test");
+  } else if (uri == "/ncsi.txt") {
+    server.send(200, "text/plain", "Microsoft NCSI");
+  } else if (uri == "/success.txt") {
+    server.send(200, "text/plain", "success
+");
+  } else {
+    server.send(204, "text/plain", "");
+  }
+}
+
 void handlePortalProbe() {
-  String html = "<!doctype html><html><head><meta name='viewport' content='width=device-width,initial-scale=1'><meta http-equiv='refresh' content='0;url=/'></head></html>";
-  server.send(200, "text/html", html);
+  if (isAcceptedClient(server.client().remoteIP())) sendOnlineReply();
+  else redirectToMenu();
+}
+
+void handleGo() {
+  String path = server.arg("to");
+  if (!path.startsWith("/") || path.startsWith("//")) path = "/";
+  acceptClient(server.client().remoteIP());
+  server.sendHeader("Location", piUrl(path.c_str()));
+  server.sendHeader("Cache-Control", "no-cache, no-store");
+  server.send(302, "text/html", "");
 }
 
 void setup() {
@@ -119,6 +175,8 @@ void setup() {
     if (host == WiFi.softAPIP().toString() || host.startsWith("192.168.4.1")) handleMenu();
     else handlePortalProbe();
   });
+
+  server.on("/go", HTTP_GET, handleGo);
 
   server.onNotFound([]() {
     String host = server.hostHeader();
