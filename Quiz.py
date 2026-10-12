@@ -1,13 +1,18 @@
+import base64
 from collections import Counter
 from contextlib import closing
 from datetime import datetime
 from html import escape
+import json
+import math
 import os
 import random
 import re
+import secrets
 import sqlite3
+import time
 
-from flask import Flask, redirect, request, session, url_for
+from flask import Flask, Response, redirect, request, session, url_for
 
 
 app = Flask(__name__)
@@ -51,6 +56,58 @@ DOPEWARS_LOCATION_MULTIPLIER = {
     "Brooklyn": 1.1,
 }
 DOPEWARS_INTEREST_RATE = 0.1
+
+DRAWING_SECONDS = 120
+DRAWING_REVEAL_SECONDS = 15
+DRAWING_SUBMIT_GRACE_SECONDS = 5
+DRAWING_LATE_JOIN_MIN_SECONDS = 20
+DRAWING_LOBBY_TIMEOUT_SECONDS = 20 * 60
+DRAWING_MAX_IMAGE_CHARS = 400_000
+DRAWING_MAX_NAME_LENGTH = 20
+DRAWING_KEEP_ROUNDS = 10
+DRAWING_IMAGE_RE = re.compile(r"data:image/(jpeg|png);base64,([A-Za-z0-9+/=]+)")
+DRAWING_PROMPTS = [
+    "A cowboy riding a giant chicken",
+    "The bartender on their day off",
+    "A cat running for mayor",
+    "Your worst haircut ever",
+    "A dinosaur at a job interview",
+    "The last slice of pizza fighting back",
+    "A tractor in a fancy restaurant",
+    "Bigfoot on a first date",
+    "A goat doing karaoke",
+    "The world's laziest superhero",
+    "A raccoon stealing a beer",
+    "What your dog dreams about",
+    "A pickle with a secret",
+    "An armadillo starting a band",
+    "A cactus that wants a hug",
+    "Grandma on a motorcycle",
+    "A fish who thinks it's a bird",
+    "The ghost of a cheeseburger",
+    "A haunted jukebox",
+    "Aliens visiting a gas station",
+    "A cow getting a tattoo",
+    "A snowman on vacation in Texas",
+    "A spider wearing eight boots",
+    "The most dramatic sneeze in history",
+    "A frog winning the lottery",
+    "A robot learning to line dance",
+    "Your phone if it could talk back",
+    "A squirrel planning a heist",
+    "A potato's family portrait",
+    "The moon getting a sunburn",
+    "A shark at the dentist",
+    "Elvis buying groceries",
+    "A pirate who is scared of water",
+    "A horse trying to use a smartphone",
+    "The world's angriest cupcake",
+    "A wizard stuck in traffic",
+    "A chicken crossing the road (and why)",
+    "A pig with a fancy mustache",
+    "A UFO abducting a pickup truck",
+    "A mermaid at a car wash",
+]
 
 
 def strip_internal_round_labels(text):
@@ -239,6 +296,16 @@ def init_db():
             id INTEGER PRIMARY KEY AUTOINCREMENT, participant_id INTEGER NOT NULL, milestone INTEGER NOT NULL,
             created_at TEXT NOT NULL, redeemed_at TEXT, FOREIGN KEY(participant_id) REFERENCES participants(id) ON DELETE CASCADE,
             UNIQUE(participant_id, milestone)
+        );
+        CREATE TABLE IF NOT EXISTS drawing_rounds (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, prompt TEXT NOT NULL, status TEXT NOT NULL,
+            created_at REAL NOT NULL, draw_ends_at REAL, reveal_started_at REAL, ended_at REAL
+        );
+        CREATE TABLE IF NOT EXISTS drawing_entries (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, round_id INTEGER NOT NULL, player_token TEXT NOT NULL,
+            nickname TEXT NOT NULL, joined_at REAL NOT NULL, image TEXT, submitted_at REAL,
+            FOREIGN KEY(round_id) REFERENCES drawing_rounds(id) ON DELETE CASCADE,
+            UNIQUE(round_id, player_token)
         );
         CREATE TABLE IF NOT EXISTS dopewars_scores (
             participant_id INTEGER PRIMARY KEY,
@@ -596,6 +663,7 @@ def menu():
         "<a class='btn btn-sec' href='/answers'>📊 Community Answers</a>",
         "<a class='btn btn-sec' href='/gold-users'>🥇 Gold Users</a>",
         "<a class='btn btn-sec' href='/games/dopewars'>🕹 Games</a>",
+        "<a class='btn btn-sec' href='/games/drawing'>🎨 Drawing with Friends</a>",
         "<a class='btn btn-sec' href='/admin'>🛠 Admin</a>",
         "<div class='question left'><h2>🕹 Dopewars</h2><p>Classic text-based street trading across NYC.</p><a class='btn btn-ok' href='/games/dopewars'>Play Dopewars</a><h3>High Scores</h3>",
     ]
@@ -619,6 +687,8 @@ html,body{margin:0;height:100%;background:#0f1115;color:#f4f7ff;font-family:Aria
 h1{font-size:6vh;margin:0 0 3vh}h2{font-size:4.5vh;margin:0 0 2vh}.muted{color:#a7b0c0;font-size:3vh}
 table{border-collapse:collapse;font-size:4vh;min-width:60vw}td,th{padding:1.2vh 2vw;border-bottom:1px solid #2a3140;text-align:left}
 th{color:#a7b0c0;font-size:2.8vh}td.score{color:#80efad;font-weight:bold;text-align:right}tr.first td{color:#ffd54a}
+.timer{font-size:22vh;font-weight:bold;color:#ffd54a;line-height:1}.art{max-height:62vh;max-width:90vw;border-radius:12px;background:#fff;margin:1vh 0}
+.chips{display:flex;flex-wrap:wrap;gap:1.5vh;justify-content:center;margin:3vh 0}.chip{background:#6a3fb5;padding:1.2vh 2.5vw;border-radius:999px;font-size:3.5vh}
 </style></head><body><div id='app'><h1>🍺 Cotton Flat Bar Quiz</h1></div>
 <script>
 const app = document.getElementById('app');
@@ -634,10 +704,36 @@ function renderScores(st){
   h += "<p class='muted'>Join the Wi-Fi “Cotton Flat Bar Quiz” to play</p>";
   return h;
 }
-function render(st){ app.innerHTML = renderScores(st); }
+let deadline = 0, lastHtml = '';
+function fmt(sec){sec=Math.max(0,Math.ceil(sec));return Math.floor(sec/60)+':'+String(sec%60).padStart(2,'0');}
+function renderDrawing(st){
+  let h = "<h2>🎨 Drawing with Friends</h2>";
+  if(st.phase=='lobby'){
+    h += "<h1>New round starting!</h1><p class='muted'>On your phone: Wi-Fi “Cotton Flat Bar Quiz” → Drawing with Friends</p>";
+    h += "<div class='chips'>" + st.players.map(n=>`<span class='chip'>${esc(n)}</span>`).join('') + "</div>";
+    h += `<p class='muted'>${st.players.length} player${st.players.length==1?'':'s'} in · waiting for someone to press Start</p>`;
+  }else if(st.phase=='drawing'){
+    h += `<h1>Draw: “${esc(st.prompt)}”</h1><div id='timer' class='timer'></div>`;
+    h += `<p class='muted'>${st.submitted} of ${st.players.length} drawings in</p>`;
+  }else if(st.phase=='reveal'){
+    const r = st.reveal;
+    h += `<p class='muted'>“${esc(st.prompt)}”</p><img class='art' src='/games/drawing/image/${r.entry_id}'>`;
+    h += `<h1>by ${esc(r.nickname)}</h1><p class='muted'>${r.index} of ${r.total}</p>`;
+  }
+  return h;
+}
+function render(st){
+  const html = st.mode=='drawing' ? renderDrawing(st) : renderScores(st);
+  if(st.mode=='drawing' && st.phase=='drawing') deadline = Date.now() + st.seconds_left*1000;
+  if(html !== lastHtml){ app.innerHTML = html; lastHtml = html; }
+  tick();
+}
+function tick(){ const t = document.getElementById('timer'); if(t) t.textContent = fmt((deadline-Date.now())/1000); }
+setInterval(tick, 250);
 async function poll(){
-  try{ const r = await fetch('/tv/state',{cache:'no-store'}); render(await r.json()); }catch(e){}
-  setTimeout(poll, 3000);
+  let wait = 3000;
+  try{ const r = await fetch('/tv/state',{cache:'no-store'}); const st = await r.json(); render(st); if(st.mode=='drawing') wait = 1500; }catch(e){}
+  setTimeout(poll, wait);
 }
 poll();
 </script></body></html>"""
@@ -655,7 +751,304 @@ def tv():
 @app.route("/tv/state")
 def tv_state():
     with closing(db_conn()) as conn:
+        state = drawing_state(conn)
+        if state["phase"] != "none":
+            return {"mode": "drawing", **state}
         return {"mode": "scores", "scores": tv_scores(conn)}
+
+
+def clock():
+    return time.time()
+
+
+def drawing_entries(conn, round_id):
+    return conn.execute(
+        "SELECT id, player_token, nickname, joined_at, submitted_at FROM drawing_entries WHERE round_id = ? ORDER BY joined_at ASC, id ASC",
+        (round_id,),
+    ).fetchall()
+
+
+def drawing_end_round(conn, round_id, status):
+    conn.execute("UPDATE drawing_rounds SET status = ?, ended_at = ? WHERE id = ?", (status, clock(), round_id))
+    conn.commit()
+
+
+def drawing_current_round(conn):
+    """Return (round, entries, phase) for the running round, advancing it by the clock; None when idle."""
+    rnd = conn.execute("SELECT * FROM drawing_rounds WHERE status IN ('lobby', 'drawing') ORDER BY id DESC LIMIT 1").fetchone()
+    if not rnd:
+        return None
+    current = clock()
+    entries = drawing_entries(conn, rnd["id"])
+    if rnd["status"] == "lobby":
+        if current - rnd["created_at"] > DRAWING_LOBBY_TIMEOUT_SECONDS:
+            drawing_end_round(conn, rnd["id"], "expired")
+            return None
+        return rnd, entries, "lobby"
+    submitted = [entry for entry in entries if entry["submitted_at"] is not None]
+    reveal_start = rnd["reveal_started_at"]
+    if reveal_start is None:
+        everyone_done = bool(entries) and len(submitted) == len(entries)
+        if not everyone_done and current < rnd["draw_ends_at"] + DRAWING_SUBMIT_GRACE_SECONDS:
+            return rnd, entries, "drawing"
+        reveal_start = current
+        conn.execute("UPDATE drawing_rounds SET reveal_started_at = ? WHERE id = ?", (reveal_start, rnd["id"]))
+        conn.commit()
+        rnd = conn.execute("SELECT * FROM drawing_rounds WHERE id = ?", (rnd["id"],)).fetchone()
+    if current >= reveal_start + DRAWING_REVEAL_SECONDS * len(submitted):
+        drawing_end_round(conn, rnd["id"], "done")
+        return None
+    return rnd, entries, "reveal"
+
+
+def drawing_state(conn, player_token=None):
+    current_round = drawing_current_round(conn)
+    if not current_round:
+        return {"phase": "none"}
+    rnd, entries, phase = current_round
+    current = clock()
+    submitted = [entry for entry in entries if entry["submitted_at"] is not None]
+    me = next((entry for entry in entries if player_token and entry["player_token"] == player_token), None)
+    state = {
+        "phase": phase,
+        "round_id": rnd["id"],
+        "prompt": rnd["prompt"] if phase != "lobby" else "",
+        "players": [entry["nickname"] for entry in entries],
+        "submitted": len(submitted),
+        "joined": me is not None,
+        "my_submitted": bool(me and me["submitted_at"] is not None),
+        "my_name": me["nickname"] if me else "",
+    }
+    if phase == "drawing":
+        state["seconds_left"] = max(0, int(math.ceil(rnd["draw_ends_at"] - current)))
+    elif phase == "reveal":
+        elapsed = current - rnd["reveal_started_at"]
+        index = min(int(elapsed // DRAWING_REVEAL_SECONDS), len(submitted) - 1)
+        entry = submitted[index]
+        state["reveal"] = {
+            "index": index + 1,
+            "total": len(submitted),
+            "nickname": entry["nickname"],
+            "entry_id": entry["id"],
+            "seconds_left": max(1, int(math.ceil(DRAWING_REVEAL_SECONDS * (index + 1) - elapsed))),
+        }
+    return state
+
+
+def drawing_token():
+    if not session.get("drawing_token"):
+        session["drawing_token"] = secrets.token_hex(8)
+    return session["drawing_token"]
+
+
+def drawing_new_prompt(conn):
+    recent = {row["prompt"] for row in conn.execute("SELECT prompt FROM drawing_rounds ORDER BY id DESC LIMIT 15")}
+    choices = [prompt for prompt in DRAWING_PROMPTS if prompt not in recent] or DRAWING_PROMPTS
+    return random.choice(choices)
+
+
+def drawing_prune(conn):
+    old_ids = [row["id"] for row in conn.execute("SELECT id FROM drawing_rounds ORDER BY id DESC LIMIT -1 OFFSET ?", (DRAWING_KEEP_ROUNDS,))]
+    for round_id in old_ids:
+        conn.execute("DELETE FROM drawing_entries WHERE round_id = ?", (round_id,))
+        conn.execute("DELETE FROM drawing_rounds WHERE id = ?", (round_id,))
+
+
+def drawing_join_form(error=""):
+    return (
+        f"{error}<form method='post' action='/games/drawing/join' class='form'>"
+        f"<input name='nickname' maxlength='{DRAWING_MAX_NAME_LENGTH}' required placeholder='Your name for the TV'>"
+        "<button class='btn btn-ok' type='submit'>Join</button></form>"
+    )
+
+
+DRAWING_PAD = """
+<p class='muted'>Time left: <strong id='timer' style='font-size:1.4em;color:#ffd54a'></strong></p>
+<canvas id='pad' width='480' height='360' style='width:100%;touch-action:none;background:#fff;border-radius:8px'></canvas>
+<div class='admin-row' id='colors'></div>
+<div class='admin-row'><button class='btn btn-sec small' data-size='4'>Thin</button><button class='btn btn-sec small' data-size='10'>Medium</button><button class='btn btn-sec small' data-size='22'>Thick</button><button class='btn btn-sec small' id='eraser'>Eraser</button><button class='btn btn-del small' id='clear'>Clear</button></div>
+<button class='btn btn-ok' id='send'>Submit Drawing</button>
+<script>
+const c = document.getElementById('pad'), ctx = c.getContext('2d');
+ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, c.width, c.height);
+let color = '#111111', size = 10, down = false, last = null, sent = false;
+['#111111','#e53935','#fb8c00','#fdd835','#43a047','#1e88e5','#8e24aa','#6d4c41','#f48fb1'].forEach(col => {
+  const b = document.createElement('button'); b.className = 'btn small'; b.style.background = col; b.style.width = '38px'; b.innerHTML = '&nbsp;';
+  b.onclick = () => { color = col; }; document.getElementById('colors').appendChild(b);
+});
+document.querySelectorAll('[data-size]').forEach(b => b.onclick = () => { size = Number(b.dataset.size); });
+document.getElementById('eraser').onclick = () => { color = '#ffffff'; size = 22; };
+document.getElementById('clear').onclick = () => { if (confirm('Clear your drawing?')) { ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, c.width, c.height); } };
+function pos(e) { const r = c.getBoundingClientRect(); return { x: (e.clientX - r.left) * c.width / r.width, y: (e.clientY - r.top) * c.height / r.height }; }
+function dot(p) { ctx.fillStyle = color; ctx.beginPath(); ctx.arc(p.x, p.y, size / 2, 0, Math.PI * 2); ctx.fill(); }
+function line(a, b) { ctx.strokeStyle = color; ctx.lineWidth = size; ctx.lineCap = 'round'; ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke(); }
+c.addEventListener('pointerdown', e => { e.preventDefault(); down = true; last = pos(e); c.setPointerCapture(e.pointerId); dot(last); });
+c.addEventListener('pointermove', e => { if (!down) return; const p = pos(e); line(last, p); last = p; });
+['pointerup', 'pointercancel'].forEach(n => c.addEventListener(n, () => { down = false; }));
+async function submitDrawing() {
+  if (sent) return; sent = true; document.getElementById('send').disabled = true;
+  try { await fetch('/games/drawing/submit', { method: 'POST', body: new URLSearchParams({ image: c.toDataURL('image/jpeg', 0.8) }) }); } catch (e) {}
+  location.reload();
+}
+document.getElementById('send').onclick = submitDrawing;
+const deadline = Date.now() + SECONDS_LEFT * 1000;
+function tick() { const left = Math.max(0, Math.ceil((deadline - Date.now()) / 1000)); document.getElementById('timer').textContent = Math.floor(left / 60) + ':' + String(left % 60).padStart(2, '0'); if (left <= 0) submitDrawing(); }
+tick(); setInterval(tick, 500);
+</script>"""
+
+
+def drawing_page_key(state):
+    reveal = state.get("reveal") or {}
+    return f"{state['phase']}|{state.get('round_id', '')}|{state.get('joined', '')}|{state.get('my_submitted', '')}|{reveal.get('index', '')}"
+
+
+def drawing_render_body(state, error=""):
+    phase = state["phase"]
+    players = ", ".join(escape(name) for name in state.get("players", [])) or "nobody yet"
+    body = ["<h1>🎨 Drawing with Friends</h1>"]
+    if phase == "none":
+        body.append(f"<p class='muted'>Everyone gets the same funny prompt and {DRAWING_SECONDS // 60} minutes to draw it. Then each drawing is shown on the TV for {DRAWING_REVEAL_SECONDS} seconds.</p>")
+        body.append("<form method='post' action='/games/drawing/new'><button class='btn btn-ok' type='submit'>Start a New Round</button></form>")
+    elif phase == "lobby":
+        if state["joined"]:
+            body.append(f"<div class='notice'>You're in as <strong>{escape(state['my_name'])}</strong>. The prompt appears when drawing starts.</div>")
+            body.append(f"<p>Players: {players}</p>")
+            body.append("<form method='post' action='/games/drawing/start'><button class='btn btn-ok' type='submit'>Everyone's In - Start Drawing!</button></form>")
+        else:
+            body.append(f"<p>A round is about to start. Players so far: {players}</p>")
+            body.append(drawing_join_form(error))
+    elif phase == "drawing":
+        if state["joined"] and not state["my_submitted"]:
+            body.append(f"<h2>Draw: “{escape(state['prompt'])}”</h2>")
+            body.append(DRAWING_PAD.replace("SECONDS_LEFT", str(state["seconds_left"])))
+        elif state["joined"]:
+            body.append(f"<div class='notice'>Drawing sent! Waiting for the others ({state['submitted']} of {len(state['players'])} in).</div>")
+        elif state["seconds_left"] > DRAWING_LATE_JOIN_MIN_SECONDS:
+            body.append(f"<p>A round is underway ({state['seconds_left']} seconds left). Jump in and draw with the time that's left:</p>")
+            body.append(drawing_join_form(error))
+        else:
+            body.append("<p>This round is almost over. Watch the TV and join the next one!</p>")
+    elif phase == "reveal":
+        reveal = state["reveal"]
+        body.append(f"<h2>Look at the TV! “{escape(state['prompt'])}”</h2>")
+        body.append(f"<img src='/games/drawing/image/{reveal['entry_id']}' style='width:100%;border-radius:8px;background:#fff'>")
+        body.append(f"<p>by <strong>{escape(reveal['nickname'])}</strong> · {reveal['index']} of {reveal['total']}</p>")
+    body.append("<a class='btn btn-sec' href='/'>Back to Menu</a>")
+    if phase != "drawing" or not state.get("joined") or state.get("my_submitted"):
+        body.append(
+            "<script>const KEY = " + json.dumps(drawing_page_key(state)) + ";"
+            "setInterval(async () => { try { const r = await fetch('/games/drawing/state', {cache: 'no-store'}); const s = await r.json();"
+            " if (s.key !== KEY) location.reload(); } catch (e) {} }, 3000);</script>"
+        )
+    return "".join(body)
+
+
+@app.route("/games/drawing")
+def drawing_game():
+    with closing(db_conn()) as conn:
+        state = drawing_state(conn, drawing_token())
+    return page("Drawing with Friends", drawing_render_body(state))
+
+
+@app.route("/games/drawing/state")
+def drawing_game_state():
+    with closing(db_conn()) as conn:
+        state = drawing_state(conn, drawing_token())
+    state["key"] = drawing_page_key(state)
+    return state
+
+
+@app.route("/games/drawing/new", methods=["POST"])
+def drawing_new():
+    with closing(db_conn()) as conn:
+        if not drawing_current_round(conn):
+            drawing_prune(conn)
+            conn.execute("INSERT INTO drawing_rounds (prompt, status, created_at) VALUES (?, 'lobby', ?)", (drawing_new_prompt(conn), clock()))
+            conn.commit()
+    return redirect(url_for("drawing_game"))
+
+
+@app.route("/games/drawing/join", methods=["POST"])
+def drawing_join():
+    token = drawing_token()
+    nickname = re.sub(r"\s+", " ", request.form.get("nickname", "")).strip()[:DRAWING_MAX_NAME_LENGTH]
+    with closing(db_conn()) as conn:
+        current_round = drawing_current_round(conn)
+        if not nickname:
+            state = drawing_state(conn, token)
+            return page("Drawing with Friends", drawing_render_body(state, "<div class='error'>Please enter a name.</div>"))
+        if current_round:
+            rnd, _entries, phase = current_round
+            can_join = phase == "lobby" or (phase == "drawing" and rnd["draw_ends_at"] - clock() > DRAWING_LATE_JOIN_MIN_SECONDS)
+            if can_join:
+                conn.execute(
+                    "INSERT OR IGNORE INTO drawing_entries (round_id, player_token, nickname, joined_at) VALUES (?, ?, ?, ?)",
+                    (rnd["id"], token, nickname, clock()),
+                )
+                conn.commit()
+    return redirect(url_for("drawing_game"))
+
+
+@app.route("/games/drawing/start", methods=["POST"])
+def drawing_start():
+    token = drawing_token()
+    with closing(db_conn()) as conn:
+        current_round = drawing_current_round(conn)
+        if current_round and current_round[2] == "lobby" and any(entry["player_token"] == token for entry in current_round[1]):
+            conn.execute(
+                "UPDATE drawing_rounds SET status = 'drawing', draw_ends_at = ? WHERE id = ? AND status = 'lobby'",
+                (clock() + DRAWING_SECONDS, current_round[0]["id"]),
+            )
+            conn.commit()
+    return redirect(url_for("drawing_game"))
+
+
+@app.route("/games/drawing/submit", methods=["POST"])
+def drawing_submit():
+    image = request.form.get("image", "")
+    match = DRAWING_IMAGE_RE.fullmatch(image) if len(image) <= DRAWING_MAX_IMAGE_CHARS else None
+    if not match:
+        return {"ok": False, "error": "Invalid drawing."}, 400
+    try:
+        base64.b64decode(match.group(2), validate=True)
+    except ValueError:
+        return {"ok": False, "error": "Invalid drawing."}, 400
+    with closing(db_conn()) as conn:
+        current_round = drawing_current_round(conn)
+        if not current_round or current_round[2] != "drawing":
+            return {"ok": False, "error": "Drawing time is over."}, 409
+        cur = conn.execute(
+            "UPDATE drawing_entries SET image = ?, submitted_at = ? WHERE round_id = ? AND player_token = ? AND submitted_at IS NULL",
+            (image, clock(), current_round[0]["id"], drawing_token()),
+        )
+        conn.commit()
+        if cur.rowcount == 0:
+            return {"ok": False, "error": "You are not in this round or already submitted."}, 409
+    return {"ok": True}
+
+
+@app.route("/games/drawing/image/<int:entry_id>")
+def drawing_image(entry_id):
+    with closing(db_conn()) as conn:
+        row = conn.execute("SELECT image FROM drawing_entries WHERE id = ? AND image IS NOT NULL", (entry_id,)).fetchone()
+    match = DRAWING_IMAGE_RE.fullmatch(row["image"]) if row else None
+    if not match:
+        return Response("Not found", status=404, mimetype="text/plain")
+    response = Response(base64.b64decode(match.group(2)), mimetype=f"image/{match.group(1)}")
+    response.headers["Cache-Control"] = "public, max-age=3600"
+    return response
+
+
+@app.route("/admin/drawing/end", methods=["POST"])
+def drawing_admin_end():
+    denied = require_admin()
+    if denied:
+        return denied
+    with closing(db_conn()) as conn:
+        current_round = drawing_current_round(conn)
+        if current_round:
+            drawing_end_round(conn, current_round[0]["id"], "cancelled")
+    return redirect(url_for("admin"))
 
 
 @app.route("/games")
@@ -1015,6 +1408,7 @@ def admin():
     for question in questions:
         kind = "Free write" if question["is_open_text"] else "Multiple choice"
         body += f"<div class='question left'><strong>{escape(strip_internal_round_labels(question['text']))}</strong><p class='muted'>{kind} · Question {question['question_number']} · ID {question['id']}</p><div class='admin-row'><a class='btn btn-warn small' href='/admin/edit-question/{question['id']}'>Edit</a><form method='post' action='/admin/delete-question-number/{question['question_number']}' onsubmit=\"return confirm('Delete this question and all answers?');\"><button class='btn btn-del small'>Delete</button></form></div></div>"
+    body += "<h2>Drawing with Friends</h2><form method='post' action='/admin/drawing/end' onsubmit=\"return confirm('End the current drawing round?');\"><button class='btn btn-del small'>End Current Drawing Round</button></form>"
     body += "<a class='btn btn-sec' href='/tv'>TV Screen</a><a class='btn btn-sec' href='/gold-users'>View Gold Users</a><a class='btn btn-sec' href='/admin/logout'>Log Out</a><a class='btn btn-sec' href='/'>Back to Menu</a>"
     return page("Host Admin", body)
 
