@@ -10,6 +10,7 @@ import random
 import re
 import secrets
 import sqlite3
+import threading
 import time
 
 from flask import Flask, Response, redirect, request, session, url_for
@@ -26,6 +27,8 @@ SOURCE_FILE_PATH = os.path.abspath(__file__)
 ADMIN_PASS = os.environ.get("COTTON_FLAT_ADMIN_PASS", "1346")
 FLASK_HOST = os.environ.get("FLASK_HOST", "0.0.0.0")
 FLASK_PORT = int(os.environ.get("FLASK_PORT", "5000"))
+PORTAL_PORT = int(os.environ.get("PORTAL_PORT", "0"))
+PORTAL_HOST = os.environ.get("COTTON_FLAT_PORTAL_HOST", "192.168.4.1")
 
 MAX_QUESTION_LENGTH = 500
 MAX_OPTION_LENGTH = 200
@@ -377,6 +380,52 @@ def page(title, body):
         f"<title>{escape(title)}</title>{BASE_STYLE}</head><body><main class='card'>"
         f"{body}</main></body></html>"
     )
+
+
+# Phones joining the hotspot ask a well-known site "is there internet?". The
+# hotspot's DNS sends every name to the Pi, so those checks land here: until a
+# phone opens a quiz page we redirect them to the menu (the sign-in popup
+# opens it), afterwards we answer "online" so the phone stays connected.
+CAPTIVE_SUCCESS_REPLIES = {
+    "/generate_204": (204, ""),
+    "/gen_204": (204, ""),
+    "/hotspot-detect.html": (200, "<HTML><HEAD><TITLE>Success</TITLE></HEAD><BODY>Success</BODY></HTML>"),
+    "/library/test/success.html": (200, "<HTML><HEAD><TITLE>Success</TITLE></HEAD><BODY>Success</BODY></HTML>"),
+    "/connecttest.txt": (200, "Microsoft Connect Test"),
+    "/ncsi.txt": (200, "Microsoft NCSI"),
+    "/success.txt": (200, "success"),
+}
+CAPTIVE_FREE_PATHS = {"/", "/health"}
+signed_in_clients = {}
+
+
+def is_quiz_host(host):
+    name = (host or "").lower()
+    if name.startswith("["):
+        return True
+    name = name.split(":")[0]
+    return (
+        not name
+        or name in {"localhost", "raspberrypi"}
+        or name.endswith(".local")
+        or re.fullmatch(r"[0-9.]+", name) is not None
+    )
+
+
+@app.before_request
+def captive_portal():
+    if is_quiz_host(request.host):
+        if request.path not in CAPTIVE_FREE_PATHS and not request.path.startswith("/tv"):
+            signed_in_clients[request.remote_addr] = time.time()
+        return None
+    reply = CAPTIVE_SUCCESS_REPLIES.get(request.path)
+    if reply and request.remote_addr in signed_in_clients:
+        status, text = reply
+        response = Response(text, status=status, mimetype="text/html" if text.startswith("<") else "text/plain")
+    else:
+        response = redirect(f"http://{PORTAL_HOST}/", 302)
+    response.headers["Cache-Control"] = "no-cache, no-store"
+    return response
 
 
 def admin_required():
@@ -1577,5 +1626,15 @@ def logout():
 
 init_db()
 
+def serve_portal_port():
+    from werkzeug.serving import make_server
+    try:
+        make_server(FLASK_HOST, PORTAL_PORT, app, threaded=True).serve_forever()
+    except OSError as error:
+        print(f"Could not open the hotspot port {PORTAL_PORT}: {error}", flush=True)
+
+
 if __name__ == "__main__":
+    if PORTAL_PORT and PORTAL_PORT != FLASK_PORT:
+        threading.Thread(target=serve_portal_port, daemon=True).start()
     app.run(host=FLASK_HOST, port=FLASK_PORT, debug=False, threaded=True)

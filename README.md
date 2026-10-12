@@ -86,25 +86,19 @@ sudo systemctl restart cotton-flat-quiz.service
 - `/tv` — full-screen TV display (Dopewars high scores, or the drawing game while a round runs)
 - `/admin` — host administration
 
-## ESP32 portal
+## Wi-Fi hotspot (Pi, no ESP32)
 
-Flash `esp32_portal.ino` to the ESP32. It creates the open Wi-Fi network **Cotton Flat Bar Quiz** and hosts the portal menu at:
+The Pi's built-in Wi-Fi broadcasts the open network **Cotton Flat Bar Quiz** and the Pi is `192.168.4.1` on it. The USB Wi-Fi dongle stays connected to the bar's internet, so Raspberry Pi Connect keeps working. Set it up once, from the repo folder on the Pi:
 
-```text
-http://192.168.4.1
+```bash
+sudo bash setup-hotspot.sh
 ```
 
-The ESP32 menu sends quiz requests to the Raspberry Pi at:
+The script refuses to run if the built-in Wi-Fi is the Pi's only internet connection. Unplug the ESP32 afterwards so two networks don't share the same name.
 
-```text
-http://192.168.4.4:5000
-```
+The hotspot answers every name lookup with `192.168.4.1`, and the quiz also listens on port 80 (`PORTAL_PORT=80` in `cotton-flat-quiz.service`). A phone's "is there internet?" check is redirected to `http://192.168.4.1/`, so the sign-in popup opens the main menu. Once the phone opens any quiz page, its next check gets a success reply, so the popup shows **Done** and the phone stays connected.
 
-The Pi must use `192.168.4.4` on the ESP32 access-point network. Set it as a static address on the Pi: the ESP32 hands phones `192.168.4.10` and up, so a Pi left on DHCP would get one of those instead. If that address changes, update `PI_IP` in `esp32_portal.ino`, reflash the ESP32, and restart the Flask service on the Pi.
-
-When a phone joins, the ESP32 answers the phone's "is there internet?" check with a redirect to `http://192.168.4.1/`, so the sign-in popup opens the menu automatically. Menu buttons go through `/go?to=<path>`, which marks that phone as signed in; its next check gets a success reply, so the popup shows **Done** and the phone stays on the quiz Wi-Fi.
-
-The ESP32 checks `/health` before displaying the menu. An offline indicator means the Pi service is not reachable; it does not necessarily indicate an ESP32 failure.
+`esp32_portal.ino` is the old ESP32 version of this and is no longer needed.
 
 ## Games
 

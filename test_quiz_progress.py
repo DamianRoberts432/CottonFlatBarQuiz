@@ -547,6 +547,20 @@ class QuizProgressTestCase(unittest.TestCase):
         self.assertIn("SCORE1", menu)
         self.assertIn("$10000", menu)
 
+    def test_captive_probe_redirects_until_phone_opens_a_page(self):
+        Quiz.signed_in_clients.clear()
+        probe = self.client.get("/generate_204", headers={"Host": "connectivitycheck.gstatic.com"})
+        self.assertEqual((probe.status_code, probe.headers["Location"]), (302, "http://192.168.4.1/"))
+        apple = self.client.get("/hotspot-detect.html", headers={"Host": "captive.apple.com"})
+        self.assertEqual(apple.status_code, 302)
+        self.assertEqual(self.client.get("/").status_code, 200)
+        self.assertEqual(self.client.get("/generate_204", headers={"Host": "connectivitycheck.gstatic.com"}).status_code, 302)
+
+        self.client.get("/answers")
+        self.assertEqual(self.client.get("/generate_204", headers={"Host": "connectivitycheck.gstatic.com"}).status_code, 204)
+        self.assertIn("Success", self.client.get("/hotspot-detect.html", headers={"Host": "captive.apple.com"}).get_data(as_text=True))
+        self.assertEqual(self.client.get("/anything", headers={"Host": "example.com"}).status_code, 302)
+        Quiz.signed_in_clients.clear()
 
 if __name__ == "__main__":
     unittest.main()
