@@ -141,8 +141,7 @@ void sendOnlineReply() {
   } else if (uri == "/ncsi.txt") {
     server.send(200, "text/plain", "Microsoft NCSI");
   } else if (uri == "/success.txt") {
-    server.send(200, "text/plain", "success
-");
+    server.send(200, "text/plain", "success\n");
   } else {
     server.send(204, "text/plain", "");
   }
