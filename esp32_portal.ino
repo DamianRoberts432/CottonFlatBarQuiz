@@ -38,6 +38,8 @@ const unsigned long PI_HEALTH_CACHE_MS = 5000;
 const IPAddress AP_IP(192, 168, 4, 1);
 const IPAddress AP_GATEWAY(192, 168, 4, 1);
 const IPAddress AP_SUBNET(255, 255, 255, 0);
+// Phones get .10 and up, so DHCP never hands out the Pi fixed address .4.
+const IPAddress DHCP_POOL_START(192, 168, 4, 10);
 
 WiFiMulti wifiMulti;
 DNSServer dnsServer;
@@ -165,7 +167,7 @@ void setup() {
   Serial.begin(115200);
   WiFi.mode(WIFI_AP);
   WiFi.setSleep(false);
-  WiFi.softAPConfig(AP_IP, AP_GATEWAY, AP_SUBNET);
+  WiFi.softAPConfig(AP_IP, AP_GATEWAY, AP_SUBNET, DHCP_POOL_START);
   WiFi.softAP(AP_SSID, AP_PASSWORD, AP_CHANNEL, false, AP_MAX_CLIENTS);
   dnsServer.start(DNS_PORT, "*", AP_IP);
 
