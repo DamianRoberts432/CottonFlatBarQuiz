@@ -58,4 +58,15 @@ systemctl daemon-reload
 nmcli connection up "$CON"
 systemctl restart cotton-flat-quiz.service
 
+# TV scores in a normal maximised window (taskbar stays usable) whenever the desktop starts.
+DESKTOP_USER="${SUDO_USER:-d}"
+DESKTOP_HOME="$(getent passwd "$DESKTOP_USER" | cut -d: -f6)"
+BROWSER="$(command -v chromium-browser || command -v chromium || true)"
+if [ -n "$BROWSER" ] && [ -n "$DESKTOP_HOME" ]; then
+    sudo -u "$DESKTOP_USER" mkdir -p "$DESKTOP_HOME/.config/autostart"
+    printf '[Desktop Entry]\nType=Application\nName=Quiz TV\nExec=%s --app=http://127.0.0.1:5000/tv --start-maximized\n' "$BROWSER" \
+        | sudo -u "$DESKTOP_USER" tee "$DESKTOP_HOME/.config/autostart/quiz-tv.desktop" >/dev/null
+    echo "TV scores will open in their own window next time the desktop starts."
+fi
+
 echo "Done: \"$SSID\" is broadcasting from $IFACE at 192.168.4.1. You can unplug the ESP32."

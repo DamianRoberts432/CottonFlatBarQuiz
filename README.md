@@ -1,6 +1,6 @@
 # Cotton Flat Bar Quiz
 
-Raspberry Pi Flask quiz with an ESP32 captive-portal menu.
+Raspberry Pi Flask quiz. The Pi broadcasts the "Cotton Flat Bar Quiz" Wi-Fi itself and phones get the menu as a sign-in popup.
 
 ## Raspberry Pi setup
 
@@ -62,7 +62,7 @@ Useful diagnostics:
 systemctl status cotton-flat-quiz.service --no-pager
 journalctl -u cotton-flat-quiz.service -n 100 --no-pager
 journalctl -fu cotton-flat-quiz.service
-curl http://192.168.4.4:5000/health
+curl http://192.168.4.1:5000/health
 ```
 
 To force a code update immediately:
@@ -105,13 +105,13 @@ The hotspot answers every name lookup with `192.168.4.1`, and the quiz also list
 The Flask app includes a games menu at:
 
 ```text
-http://192.168.4.4:5000/games
+http://192.168.4.1:5000/games
 ```
 
 The first game is a Python text-based Dopewars implementation at:
 
 ```text
-http://192.168.4.4:5000/games/dopewars
+http://192.168.4.1:5000/games/dopewars
 ```
 
 Players trade across NYC locations with day-by-day price changes, travel events, bank/debt actions, and a final score after day 30.
@@ -122,18 +122,13 @@ Players trade across NYC locations with day-by-day price changes, travel events,
 
 ## TV display
 
-Plug a TV into the Pi's HDMI and open `http://127.0.0.1:5000/tv` full screen. To start it automatically when the Pi desktop logs in:
+Plug a TV into the Pi's HDMI. `sudo bash setup-hotspot.sh` also sets the desktop to open `http://127.0.0.1:5000/tv` in its own maximised window at every login, so the taskbar stays usable. To open it right now:
 
 ```bash
-mkdir -p ~/.config/autostart
-printf '[Desktop Entry]
-Type=Application
-Name=Quiz TV
-Exec=chromium-browser --kiosk --noerrdialogs --disable-infobars --incognito http://127.0.0.1:5000/tv
-' > ~/.config/autostart/quiz-tv.desktop
+chromium-browser --app=http://127.0.0.1:5000/tv --start-maximized &
 ```
 
-On newer Raspberry Pi OS the browser command may be `chromium` instead of `chromium-browser`. Press `Alt+F4` to close kiosk mode.
+On newer Raspberry Pi OS the browser command may be `chromium` instead of `chromium-browser`. To stop it opening at login: `rm ~/.config/autostart/quiz-tv.desktop`.
 
 The TV rotates Dopewars high scores, Drawing with Friends scores and MVPs (most visits) every 12 seconds, and switches to the drawing game during a round. **Admin > TV Screens** can rename, hide or clear each board, remove single Dopewars scores, and add message screens. **Play as Host** on the admin page lets the host take the quiz and play the games, and the player table has **Rename** for fixing names.
 
