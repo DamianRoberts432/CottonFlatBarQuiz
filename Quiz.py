@@ -319,6 +319,8 @@ def init_db():
             round_id INTEGER NOT NULL, voter_token TEXT NOT NULL, entry_id INTEGER NOT NULL, voted_at REAL NOT NULL,
             PRIMARY KEY(round_id, voter_token)
         );
+        CREATE TABLE IF NOT EXISTS tv_screens (key TEXT PRIMARY KEY, title TEXT NOT NULL, enabled INTEGER NOT NULL DEFAULT 1);
+        CREATE TABLE IF NOT EXISTS tv_messages (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL, body TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS dopewars_scores (
             participant_id INTEGER PRIMARY KEY,
             top_score INTEGER NOT NULL,
@@ -646,7 +648,7 @@ def dopewars_finish_run(state, participant_id, reason):
 def dopewars_leaderboard(conn, limit=10):
     return conn.execute(
         """
-        SELECT COALESCE(p.name, 'Player ' || p.id) AS name, ds.top_score, ds.achieved_at
+        SELECT ds.participant_id, COALESCE(p.name, 'Player ' || p.id) AS name, ds.top_score, ds.achieved_at
         FROM dopewars_scores ds
         JOIN participants p ON p.id = ds.participant_id
         ORDER BY ds.top_score DESC, ds.achieved_at ASC, name ASC
@@ -852,10 +854,11 @@ function esc(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;',
 const BOARD_MS = 12000;
 function fmtScore(b, v){ return (b.unit=='$' ? '$' : '') + Number(v).toLocaleString(); }
 function renderScores(st){
-  const boards = st.boards.filter(b=>b.rows.length);
+  const boards = st.boards.filter(b=>b.rows.length || b.message);
   if(!boards.length) return "<h1>Cotton Flat Bar Quiz</h1><p class='muted'>No scores yet. Join the Wi-Fi <b>Cotton Flat Bar Quiz</b> and play!</p>";
   const pick = Math.floor(Date.now()/BOARD_MS) % boards.length;
   const b = boards[pick];
+  if(b.message) return `<h1>${esc(b.title)}</h1><p style='font-size:5vh;white-space:pre-wrap'>${esc(b.message)}</p><p class='muted'>${pick+1}/${boards.length}</p>`;
   let h = `<h1>${esc(b.title)}</h1><table><tr><th>#</th><th>Player</th><th style='text-align:right'>${esc(b.label)}</th></tr>`;
   b.rows.forEach((r,i)=>{h += `<tr class='${i==0?"first":""}'><td>${i+1}</td><td>${esc(r.name)}</td><td class='score'>${fmtScore(b, r.score)}</td></tr>`;});
   h += "</table>";
@@ -906,12 +909,30 @@ def mvp_leaderboard(conn, limit=10):
     ).fetchall()
 
 
-def tv_boards(conn):
+def tv_builtin_boards(conn):
     return [
         {"title": "Dopewars High Scores", "label": "Top Score", "unit": "$", "rows": [{"name": row["name"], "score": row["top_score"]} for row in dopewars_leaderboard(conn)]},
         {"title": "MVPs: Most Visits", "label": "Visits", "unit": "", "rows": [{"name": row["name"], "score": row["login_count"]} for row in mvp_leaderboard(conn)]},
         {"title": "Drawing with Friends Scores", "label": "Points", "unit": "", "rows": [{"name": row["name"], "score": row["points"]} for row in drawing_standings(conn)]},
     ]
+
+
+TV_BOARD_KEYS = ("dopewars", "mvp", "drawing")
+
+
+def tv_boards(conn, include_hidden=False):
+    settings = {row["key"]: row for row in conn.execute("SELECT * FROM tv_screens")}
+    boards = []
+    for key, board in zip(TV_BOARD_KEYS, tv_builtin_boards(conn)):
+        saved = settings.get(key)
+        board.update({"key": key, "enabled": bool(saved["enabled"]) if saved else True})
+        if saved and saved["title"]:
+            board["title"] = saved["title"]
+        if board["enabled"] or include_hidden:
+            boards.append(board)
+    for message in conn.execute("SELECT * FROM tv_messages ORDER BY id"):
+        boards.append({"key": f"message{message['id']}", "id": message["id"], "title": message["title"], "message": message["body"], "rows": [], "enabled": True})
+    return boards
 
 
 @app.route("/tv")
@@ -1597,6 +1618,39 @@ def submit_question():
     return question_form("Submit Question", url_for("submit_question"), {"is_open_text": 1}, error)
 
 
+def admin_tv_html(conn):
+    html = ["<h2>TV Screens</h2><p class='muted'>The TV rotates these every 12 seconds. Score boards with nobody on them are skipped.</p>"]
+    for board in tv_boards(conn, include_hidden=True):
+        if "message" in board:
+            html.append(
+                f"<div class='question left'><strong>{escape(board['title'])}</strong><p>{escape(board['message'])}</p>"
+                f"<form method='post' action='/admin/tv/message/{board['id']}/delete'><button class='btn btn-del small'>Remove Message Screen</button></form></div>"
+            )
+            continue
+        checked = " checked" if board["enabled"] else ""
+        html.append(
+            f"<div class='question left'><form method='post' action='/admin/tv/screen/{board['key']}' class='form'>"
+            f"<input name='title' maxlength='60' required value='{escape(board['title'])}'>"
+            f"<label class='choice'><input type='checkbox' name='enabled' value='1'{checked}> Show on TV</label>"
+            "<button class='btn btn-ok small' type='submit'>Save</button></form>"
+            f"<form method='post' action='/admin/tv/clear/{board['key']}' onsubmit=\"return confirm('Clear all of these scores?');\"><button class='btn btn-del small'>Clear Scores</button></form>"
+        )
+        if board["key"] == "dopewars":
+            for row in dopewars_leaderboard(conn):
+                html.append(
+                    f"<form method='post' action='/admin/dopewars-score/{row['participant_id']}/delete' class='admin-row'>"
+                    f"<span>{escape(row['name'])}: ${row['top_score']}</span><button class='btn btn-del small'>Remove</button></form>"
+                )
+        html.append("</div>")
+    html.append(
+        "<div class='question left'><strong>Add a Message Screen</strong><form method='post' action='/admin/tv/message' class='form'>"
+        "<input name='title' maxlength='60' required placeholder='Title, e.g. Tonight'>"
+        "<textarea name='body' maxlength='300' required placeholder='Message, e.g. $3 pints until 9'></textarea>"
+        "<button class='btn btn-ok small' type='submit'>Add to TV</button></form></div>"
+    )
+    return "".join(html)
+
+
 @app.route("/admin", methods=["GET", "POST"])
 def admin():
     if request.method == "POST" and request.form.get("action") == "login":
@@ -1611,12 +1665,13 @@ def admin():
         suggestions = conn.execute("SELECT * FROM suggestions ORDER BY id ASC").fetchall()
         questions = conn.execute("SELECT * FROM questions ORDER BY id DESC").fetchall()
         participants = participant_stats(conn)
-    body = "<h1>Host Admin</h1><a class='btn btn-ok' href='/admin/add-question'>Add Question</a><h2>Participant Drink Tokens</h2>"
+        tv_html = admin_tv_html(conn)
+    body = "<h1>Host Admin</h1><form method='post' action='/admin/play-as-host'><button class='btn btn-ok' type='submit'>Play as Host (quiz, Dopewars, drawing)</button></form><a class='btn btn-ok' href='/admin/add-question'>Add Question</a><h2>Participant Drink Tokens</h2>"
     if participants:
         body += "<table class='table'><tr><th>Player</th><th>Answered</th><th>Tokens ready</th><th>Given</th><th>Progress</th><th>Action</th></tr>"
         for participant in participants:
             progress = participant["answered"] % TOKEN_MILESTONE
-            body += f"<tr><td>{escape(participant['name'])}</td><td>{participant['answered']}</td><td>{participant['unredeemed']}</td><td>{participant['redeemed']}</td><td>{progress}/{TOKEN_MILESTONE}</td><td><a class='btn btn-ok small' href='/admin/redeem-token/{participant['id']}'>Redeem</a></td></tr>"
+            body += f"<tr><td>{escape(participant['name'])}</td><td>{participant['answered']}</td><td>{participant['unredeemed']}</td><td>{participant['redeemed']}</td><td>{progress}/{TOKEN_MILESTONE}</td><td><a class='btn btn-ok small' href='/admin/redeem-token/{participant['id']}'>Redeem</a><form method='post' action='/admin/rename/{participant['id']}' class='admin-row'><input name='name' maxlength='{PLAYER_NAME_MAX_LENGTH}' required placeholder='New name' style='width:auto'><button class='btn btn-warn small'>Rename</button></form></td></tr>"
         body += "</table>"
     else:
         body += "<p class='muted'>No participants yet.</p>"
@@ -1632,9 +1687,115 @@ def admin():
     for question in questions:
         kind = "Free write" if question["is_open_text"] else "Multiple choice"
         body += f"<div class='question left'><strong>{escape(strip_internal_round_labels(question['text']))}</strong><p class='muted'>{kind} · Question {question['question_number']} · ID {question['id']}</p><div class='admin-row'><a class='btn btn-warn small' href='/admin/edit-question/{question['id']}'>Edit</a><form method='post' action='/admin/delete-question-number/{question['question_number']}' onsubmit=\"return confirm('Delete this question and all answers?');\"><button class='btn btn-del small'>Delete</button></form></div></div>"
+    body += tv_html
     body += "<h2>Drawing with Friends</h2><form method='post' action='/admin/drawing/end' onsubmit=\"return confirm('End the current drawing round?');\"><button class='btn btn-del small'>End Current Drawing Round</button></form>"
-    body += "<a class='btn btn-sec' href='/tv'>TV Screen</a><a class='btn btn-sec' href='/gold-users'>View Gold Users</a><a class='btn btn-sec' href='/admin/logout'>Log Out</a><a class='btn btn-sec' href='/'>Back to Menu</a>"
+    body += "<a class='btn btn-sec' href='/tv'>TV Screen</a><a class='btn btn-sec' href='/answers'>View Community Answers</a><a class='btn btn-sec' href='/gold-users'>View Gold Users</a><a class='btn btn-sec' href='/admin/logout'>Log Out</a><a class='btn btn-sec' href='/'>Back to Menu</a>"
     return page("Host Admin", body)
+
+
+@app.route("/admin/play-as-host", methods=["POST"])
+def admin_play_as_host():
+    denied = require_admin()
+    if denied:
+        return denied
+    with closing(db_conn()) as conn:
+        row = conn.execute("SELECT id, name FROM participants WHERE name_key = 'host'").fetchone()
+        if row:
+            participant_id, name = row["id"], row["name"]
+        else:
+            participant_id, name = conn.execute(
+                "INSERT INTO participants (pin, name, name_key, pin_hash, created_at, last_seen_at) VALUES ('host', 'Host', 'host', ?, ?, ?)",
+                (generate_password_hash(secrets.token_hex(16), method=PIN_HASH_METHOD), now(), now()),
+            ).lastrowid, "Host"
+        conn.commit()
+    session.pop("dopewars_state", None)
+    session["participant_id"] = participant_id
+    session["participant_name"] = name
+    return redirect(url_for("menu"))
+
+
+@app.route("/admin/rename/<int:participant_id>", methods=["POST"])
+def admin_rename(participant_id):
+    denied = require_admin()
+    if denied:
+        return denied
+    name = normalize_player_name(request.form.get("name"))
+    with closing(db_conn()) as conn:
+        taken = conn.execute("SELECT 1 FROM participants WHERE name_key = ? AND id != ?", (name.casefold(), participant_id)).fetchone()
+        if name and not taken:
+            conn.execute("UPDATE participants SET name = ?, name_key = ? WHERE id = ?", (name, name.casefold(), participant_id))
+            conn.execute("UPDATE drawing_players SET nickname = ? WHERE participant_id = ?", (name, participant_id))
+            conn.commit()
+    return redirect(url_for("admin"))
+
+
+@app.route("/admin/tv/screen/<key>", methods=["POST"])
+def admin_tv_screen(key):
+    denied = require_admin()
+    if denied:
+        return denied
+    if key in TV_BOARD_KEYS:
+        title = re.sub(r"\s+", " ", request.form.get("title", "")).strip()[:60]
+        with closing(db_conn()) as conn:
+            conn.execute(
+                "INSERT INTO tv_screens (key, title, enabled) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET title = excluded.title, enabled = excluded.enabled",
+                (key, title, 1 if request.form.get("enabled") else 0),
+            )
+            conn.commit()
+    return redirect(url_for("admin"))
+
+
+@app.route("/admin/tv/clear/<key>", methods=["POST"])
+def admin_tv_clear(key):
+    denied = require_admin()
+    if denied:
+        return denied
+    statement = {
+        "dopewars": "DELETE FROM dopewars_scores",
+        "mvp": "UPDATE participants SET login_count = 0",
+        "drawing": "UPDATE drawing_players SET points = 0",
+    }.get(key)
+    if statement:
+        with closing(db_conn()) as conn:
+            conn.execute(statement)
+            conn.commit()
+    return redirect(url_for("admin"))
+
+
+@app.route("/admin/dopewars-score/<int:participant_id>/delete", methods=["POST"])
+def admin_delete_dopewars_score(participant_id):
+    denied = require_admin()
+    if denied:
+        return denied
+    with closing(db_conn()) as conn:
+        conn.execute("DELETE FROM dopewars_scores WHERE participant_id = ?", (participant_id,))
+        conn.commit()
+    return redirect(url_for("admin"))
+
+
+@app.route("/admin/tv/message", methods=["POST"])
+def admin_tv_message():
+    denied = require_admin()
+    if denied:
+        return denied
+    title = request.form.get("title", "").strip()[:60]
+    text = request.form.get("body", "").strip()[:300]
+    if title and text:
+        with closing(db_conn()) as conn:
+            conn.execute("INSERT INTO tv_messages (title, body) VALUES (?, ?)", (title, text))
+            conn.commit()
+    return redirect(url_for("admin"))
+
+
+@app.route("/admin/tv/message/<int:message_id>/delete", methods=["POST"])
+def admin_tv_message_delete(message_id):
+    denied = require_admin()
+    if denied:
+        return denied
+    with closing(db_conn()) as conn:
+        conn.execute("DELETE FROM tv_messages WHERE id = ?", (message_id,))
+        conn.commit()
+    return redirect(url_for("admin"))
 
 
 @app.route("/admin/redeem-token/<int:participant_id>", methods=["GET", "POST"])

@@ -135,6 +135,8 @@ Exec=chromium-browser --kiosk --noerrdialogs --disable-infobars --incognito http
 
 On newer Raspberry Pi OS the browser command may be `chromium` instead of `chromium-browser`. Press `Alt+F4` to close kiosk mode.
 
+The TV rotates Dopewars high scores, Drawing with Friends scores and MVPs (most visits) every 12 seconds, and switches to the drawing game during a round. **Admin > TV Screens** can rename, hide or clear each board, remove single Dopewars scores, and add message screens. **Play as Host** on the admin page lets the host take the quiz and play the games, and the player table has **Rename** for fixing names.
+
 ## ESP32 secrets
 
 Keep `wifi_secrets.h` local and do not commit credentials.

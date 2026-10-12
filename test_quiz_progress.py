@@ -611,6 +611,40 @@ class QuizProgressTestCase(unittest.TestCase):
             row = conn.execute("SELECT id, name FROM participants WHERE name_key = 'rosa'").fetchone()
         self.assertEqual((row["id"], row["name"]), (old_id, "Rosa"))
         self.assertNotIn("OLD123", self.client.get("/gold-users").get_data(as_text=True))
+    def test_admin_can_play_as_host(self):
+        self.make_admin()
+        self.client.post("/admin/play-as-host")
+        self.assertEqual(self.client.get("/quiz").status_code, 200)
+        self.assertEqual(self.client.get("/games/dopewars").status_code, 200)
+        self.client.post("/games/drawing/join")
+        self.assertEqual(self.client.get("/games/drawing/state").get_json()["standings"], [{"name": "Host", "points": 0}])
+        intruder = Quiz.app.test_client()
+        self.assertIn("doesn&#x27;t match", intruder.post("/login", data={"name": "Host", "pin": "1234"}).get_data(as_text=True))
+
+    def test_admin_edits_tv_screens(self):
+        self.set_dopewars_pin(pin="hustle1")
+        self.client.post("/games/dopewars", data={"action": "quit"})
+        admin = Quiz.app.test_client()
+        self.make_admin(admin)
+        self.assertIn("TV Screens", admin.get("/admin").get_data(as_text=True))
+        admin.post("/admin/tv/screen/dopewars", data={"title": "Top Hustlers", "enabled": "1"})
+        admin.post("/admin/tv/screen/mvp", data={"title": "MVPs"})
+        admin.post("/admin/tv/message", data={"title": "Tonight", "body": "$3 pints"})
+        boards = self.client.get("/tv/state").get_json()["boards"]
+        self.assertEqual([b["title"] for b in boards], ["Top Hustlers", "Drawing with Friends Scores", "Tonight"])
+        self.assertEqual(boards[0]["rows"][0]["name"], "hustle1")
+
+        with closing(Quiz.db_conn()) as conn:
+            participant_id = conn.execute("SELECT id FROM participants WHERE name_key = 'hustle1'").fetchone()["id"]
+        admin.post(f"/admin/rename/{participant_id}", data={"name": "Polite Name"})
+        self.assertEqual(self.client.get("/tv/state").get_json()["boards"][0]["rows"][0]["name"], "Polite Name")
+        admin.post(f"/admin/dopewars-score/{participant_id}/delete")
+        self.assertEqual(self.client.get("/tv/state").get_json()["boards"][0]["rows"], [])
+        admin.post(f"/admin/tv/message/{boards[2]['id']}/delete")
+        admin.post("/admin/tv/clear/mvp")
+        admin.post("/admin/tv/screen/mvp", data={"title": "MVPs", "enabled": "1"})
+        boards = self.client.get("/tv/state").get_json()["boards"]
+        self.assertEqual(([b["title"] for b in boards], boards[1]["rows"]), (["Top Hustlers", "MVPs", "Drawing with Friends Scores"], []))
 
 if __name__ == "__main__":
     unittest.main()
