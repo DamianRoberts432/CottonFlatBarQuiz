@@ -239,6 +239,101 @@ class QuizProgressTestCase(unittest.TestCase):
         self.assertEqual(Quiz.DELETED_SEED_QUESTION_NUMBERS, [5])
         self.assertIn("DELETED_SEED_QUESTION_NUMBERS = [5]", self.source_path.read_text(encoding="utf-8"))
 
+    def test_admin_can_open_and_save_question_edit(self):
+        self.make_admin()
+        self.assertEqual(self.client.get("/admin/edit-question/1").status_code, 200)
+
+        response = self.client.post("/admin/edit-question/1", data={
+            "text": "Edited question?", "question_type": "choice",
+            "op1": "Yes", "op2": "No", "op3": "", "op4": "",
+        })
+        self.assertEqual(response.status_code, 302)
+
+        conn = Quiz.db_conn()
+        try:
+            row = conn.execute("SELECT text, is_open_text, op1, op2 FROM questions WHERE id = 1").fetchone()
+        finally:
+            conn.close()
+        self.assertEqual(tuple(row), ("Edited question?", 0, "Yes", "No"))
+
+    def test_admin_can_open_suggestion_edit(self):
+        self.make_admin()
+        conn = Quiz.db_conn()
+        try:
+            suggestion_id = conn.execute("INSERT INTO suggestions (text, created_at) VALUES ('Idea?', ?)", (Quiz.now(),)).lastrowid
+            conn.commit()
+        finally:
+            conn.close()
+        self.assertEqual(self.client.get(f"/admin/edit-suggestion/{suggestion_id}").status_code, 200)
+
+    def test_tv_shows_dopewars_scores(self):
+        self.set_dopewars_pin(pin="tv01")
+        self.client.post("/games/dopewars", data={"action": "quit"})
+        self.assertEqual(self.client.get("/tv").status_code, 200)
+        state = self.client.get("/tv/state").get_json()
+        self.assertEqual(state["mode"], "scores")
+        self.assertEqual(state["scores"][0]["name"], "TV01")
+
+    TINY_JPEG = "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQ=="
+
+    def drawing_player(self, name):
+        client = Quiz.app.test_client()
+        client.post("/games/drawing/join", data={"nickname": name})
+        return client
+
+    def test_drawing_round_flow_and_tv(self):
+        clock = [1000.0]
+        with patch.object(Quiz, "clock", lambda: clock[0]):
+            self.assertEqual(self.client.get("/games/drawing").status_code, 200)
+            self.client.post("/games/drawing/new")
+            alice = self.drawing_player("Alice")
+            bob = self.drawing_player("Bob")
+            state = self.client.get("/tv/state").get_json()
+            self.assertEqual((state["mode"], state["phase"], state["players"]), ("drawing", "lobby", ["Alice", "Bob"]))
+            self.assertEqual(state["prompt"], "")
+
+            alice.post("/games/drawing/start")
+            state = alice.get("/games/drawing/state").get_json()
+            self.assertEqual((state["phase"], state["seconds_left"], state["joined"]), ("drawing", 120, True))
+            self.assertIn("pad", alice.get("/games/drawing").get_data(as_text=True))
+
+            self.assertEqual(alice.post("/games/drawing/submit", data={"image": "nope"}).status_code, 400)
+            self.assertEqual(alice.post("/games/drawing/submit", data={"image": self.TINY_JPEG}).status_code, 200)
+            self.assertEqual(alice.post("/games/drawing/submit", data={"image": self.TINY_JPEG}).status_code, 409)
+            self.assertEqual(self.client.get("/tv/state").get_json()["phase"], "drawing")
+
+            clock[0] += 30
+            bob.post("/games/drawing/submit", data={"image": self.TINY_JPEG})
+            state = self.client.get("/tv/state").get_json()
+            self.assertEqual(state["phase"], "reveal")
+            self.assertEqual((state["reveal"]["nickname"], state["reveal"]["index"], state["reveal"]["total"]), ("Alice", 1, 2))
+            image = self.client.get(f"/games/drawing/image/{state['reveal']['entry_id']}")
+            self.assertEqual((image.status_code, image.mimetype), (200, "image/jpeg"))
+
+            clock[0] += 15
+            self.assertEqual(self.client.get("/tv/state").get_json()["reveal"]["nickname"], "Bob")
+            clock[0] += 15
+            self.assertEqual(self.client.get("/tv/state").get_json()["mode"], "scores")
+
+    def test_drawing_reveal_starts_after_timer_without_all_submissions(self):
+        clock = [1000.0]
+        with patch.object(Quiz, "clock", lambda: clock[0]):
+            self.client.post("/games/drawing/new")
+            alice = self.drawing_player("Alice")
+            self.drawing_player("Bob")
+            alice.post("/games/drawing/start")
+            alice.post("/games/drawing/submit", data={"image": self.TINY_JPEG})
+            clock[0] += Quiz.DRAWING_SECONDS + Quiz.DRAWING_SUBMIT_GRACE_SECONDS
+            state = self.client.get("/tv/state").get_json()
+            self.assertEqual((state["phase"], state["reveal"]["total"]), ("reveal", 1))
+
+    def test_admin_can_end_drawing_round(self):
+        self.client.post("/games/drawing/new")
+        self.assertEqual(self.client.get("/tv/state").get_json()["mode"], "drawing")
+        self.make_admin()
+        self.client.post("/admin/drawing/end")
+        self.assertEqual(self.client.get("/tv/state").get_json()["mode"], "scores")
+
     def test_games_page_lists_dopewars_link(self):
         response = self.client.get("/games", follow_redirects=True)
         body = response.get_data(as_text=True)
