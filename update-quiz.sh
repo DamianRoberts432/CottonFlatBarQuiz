@@ -87,8 +87,20 @@ if [ "$OLD_COMMIT" = "$NEW_COMMIT" ]; then
     exit 0
 fi
 
+# quiz.db is tracked in git, so a hard reset would replace the live database
+# (edits, answers, tokens, scores) with the committed copy. Preserve it.
+DB_BACKUP="$HOME/.cotton-flat-quiz.db.bak"
+if [ -f quiz.db ]; then
+    cp -p quiz.db "$DB_BACKUP"
+fi
+
 git reset --hard "origin/$BRANCH" >>"$LOG_FILE" 2>&1
 git clean -fd >>"$LOG_FILE" 2>&1
+
+if [ -f "$DB_BACKUP" ]; then
+    cp -p "$DB_BACKUP" quiz.db
+    log "update-quiz: restored live quiz.db after update"
+fi
 
 if ! /usr/bin/python3 -m py_compile "$REPO_DIR/Quiz.py" >>"$LOG_FILE" 2>&1; then
     log "update-quiz: Quiz.py syntax check failed; restoring $OLD_COMMIT"
