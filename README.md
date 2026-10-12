@@ -100,7 +100,7 @@ The ESP32 menu sends quiz requests to the Raspberry Pi at:
 http://192.168.4.4:5000
 ```
 
-The Pi must use `192.168.4.4` on the ESP32 access-point network. If that address changes, update `PI_IP` in `esp32_portal.ino`, reflash the ESP32, and restart the Flask service on the Pi.
+The Pi must use `192.168.4.4` on the ESP32 access-point network. Set it as a static address on the Pi: the ESP32 hands phones `192.168.4.10` and up, so a Pi left on DHCP would get one of those instead. If that address changes, update `PI_IP` in `esp32_portal.ino`, reflash the ESP32, and restart the Flask service on the Pi.
 
 When a phone joins, the ESP32 answers the phone's "is there internet?" check with a redirect to `http://192.168.4.1/`, so the sign-in popup opens the menu automatically. Menu buttons go through `/go?to=<path>`, which marks that phone as signed in; its next check gets a success reply, so the popup shows **Done** and the phone stays on the quiz Wi-Fi.
 
