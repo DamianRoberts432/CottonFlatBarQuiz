@@ -10,9 +10,11 @@ import random
 import re
 import secrets
 import sqlite3
+import threading
 import time
 
 from flask import Flask, Response, redirect, request, session, url_for
+from werkzeug.security import check_password_hash, generate_password_hash
 
 
 app = Flask(__name__)
@@ -26,6 +28,8 @@ SOURCE_FILE_PATH = os.path.abspath(__file__)
 ADMIN_PASS = os.environ.get("COTTON_FLAT_ADMIN_PASS", "1346")
 FLASK_HOST = os.environ.get("FLASK_HOST", "0.0.0.0")
 FLASK_PORT = int(os.environ.get("FLASK_PORT", "5000"))
+PORTAL_PORT = int(os.environ.get("PORTAL_PORT", "0"))
+PORTAL_HOST = os.environ.get("COTTON_FLAT_PORTAL_HOST", "192.168.4.1")
 
 MAX_QUESTION_LENGTH = 500
 MAX_OPTION_LENGTH = 200
@@ -57,13 +61,13 @@ DOPEWARS_LOCATION_MULTIPLIER = {
 }
 DOPEWARS_INTEREST_RATE = 0.1
 
-DRAWING_SECONDS = 120
-DRAWING_REVEAL_SECONDS = 15
+DRAWING_PREP_SECONDS = 10
+DRAWING_SECONDS = 90
+DRAWING_VOTE_SECONDS = 45
+DRAWING_RESULTS_SECONDS = 12
 DRAWING_SUBMIT_GRACE_SECONDS = 5
-DRAWING_LATE_JOIN_MIN_SECONDS = 20
 DRAWING_LOBBY_TIMEOUT_SECONDS = 20 * 60
 DRAWING_MAX_IMAGE_CHARS = 400_000
-DRAWING_MAX_NAME_LENGTH = 20
 DRAWING_KEEP_ROUNDS = 10
 DRAWING_IMAGE_RE = re.compile(r"data:image/(jpeg|png);base64,([A-Za-z0-9+/=]+)")
 DRAWING_PROMPTS = [
@@ -307,6 +311,16 @@ def init_db():
             FOREIGN KEY(round_id) REFERENCES drawing_rounds(id) ON DELETE CASCADE,
             UNIQUE(round_id, player_token)
         );
+        CREATE TABLE IF NOT EXISTS drawing_players (
+            player_token TEXT PRIMARY KEY, participant_id INTEGER, nickname TEXT NOT NULL,
+            points INTEGER NOT NULL DEFAULT 0, joined_at REAL NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS drawing_votes (
+            round_id INTEGER NOT NULL, voter_token TEXT NOT NULL, entry_id INTEGER NOT NULL, voted_at REAL NOT NULL,
+            PRIMARY KEY(round_id, voter_token)
+        );
+        CREATE TABLE IF NOT EXISTS tv_screens (key TEXT PRIMARY KEY, title TEXT NOT NULL, enabled INTEGER NOT NULL DEFAULT 1);
+        CREATE TABLE IF NOT EXISTS tv_messages (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL, body TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS dopewars_scores (
             participant_id INTEGER PRIMARY KEY,
             top_score INTEGER NOT NULL,
@@ -317,6 +331,15 @@ def init_db():
     """)
     ensure_column(conn, "questions", "seed_key", "TEXT")
     ensure_column(conn, "questions", "question_number", "INTEGER")
+    ensure_column(conn, "drawing_rounds", "prep_ends_at", "REAL")
+    ensure_column(conn, "drawing_rounds", "vote_started_at", "REAL")
+    ensure_column(conn, "drawing_rounds", "results_started_at", "REAL")
+    ensure_column(conn, "drawing_rounds", "winners", "TEXT")
+    ensure_column(conn, "participants", "name", "TEXT")
+    ensure_column(conn, "participants", "name_key", "TEXT")
+    ensure_column(conn, "participants", "pin_hash", "TEXT")
+    ensure_column(conn, "participants", "login_count", "INTEGER NOT NULL DEFAULT 0")
+    conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_participants_name_key ON participants(name_key)")
     conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_questions_seed_key ON questions(seed_key)")
     conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_questions_question_number ON questions(question_number)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_questions_approved_id ON questions(approved, id)")
@@ -379,6 +402,52 @@ def page(title, body):
     )
 
 
+# Phones joining the hotspot ask a well-known site "is there internet?". The
+# hotspot's DNS sends every name to the Pi, so those checks land here: until a
+# phone opens a quiz page we redirect them to the menu (the sign-in popup
+# opens it), afterwards we answer "online" so the phone stays connected.
+CAPTIVE_SUCCESS_REPLIES = {
+    "/generate_204": (204, ""),
+    "/gen_204": (204, ""),
+    "/hotspot-detect.html": (200, "<HTML><HEAD><TITLE>Success</TITLE></HEAD><BODY>Success</BODY></HTML>"),
+    "/library/test/success.html": (200, "<HTML><HEAD><TITLE>Success</TITLE></HEAD><BODY>Success</BODY></HTML>"),
+    "/connecttest.txt": (200, "Microsoft Connect Test"),
+    "/ncsi.txt": (200, "Microsoft NCSI"),
+    "/success.txt": (200, "success"),
+}
+CAPTIVE_FREE_PATHS = {"/", "/health"}
+signed_in_clients = {}
+
+
+def is_quiz_host(host):
+    name = (host or "").lower()
+    if name.startswith("["):
+        return True
+    name = name.split(":")[0]
+    return (
+        not name
+        or name in {"localhost", "raspberrypi"}
+        or name.endswith(".local")
+        or re.fullmatch(r"[0-9.]+", name) is not None
+    )
+
+
+@app.before_request
+def captive_portal():
+    if is_quiz_host(request.host):
+        if request.path not in CAPTIVE_FREE_PATHS and not request.path.startswith("/tv"):
+            signed_in_clients[request.remote_addr] = time.time()
+        return None
+    reply = CAPTIVE_SUCCESS_REPLIES.get(request.path)
+    if reply and request.remote_addr in signed_in_clients:
+        status, text = reply
+        response = Response(text, status=status, mimetype="text/html" if text.startswith("<") else "text/plain")
+    else:
+        response = redirect(f"http://{PORTAL_HOST}/", 302)
+    response.headers["Cache-Control"] = "no-cache, no-store"
+    return response
+
+
 def admin_required():
     return bool(session.get("is_admin"))
 
@@ -412,13 +481,70 @@ def normalize_pin(value):
     return re.sub(r"[^A-Z0-9]", "", (value or "").strip().upper())[:MAX_PIN_LENGTH]
 
 
-def participant_for_pin(conn, pin):
-    row = conn.execute("SELECT * FROM participants WHERE pin = ?", (pin,)).fetchone()
+PLAYER_NAME_MAX_LENGTH = 20
+PIN_HASH_METHOD = "pbkdf2:sha256:60000"
+PLAYER_NAME_SQL = "COALESCE(p.name, 'Player ' || p.id)"
+
+
+def normalize_player_name(value):
+    return re.sub(r"\s+", " ", value or "").strip()[:PLAYER_NAME_MAX_LENGTH]
+
+
+def participant_login(conn, name, pin):
+    """Return (participant_id, error). Unknown names get a new profile, or claim an old PIN-only profile with that PIN."""
+    key = name.casefold()
+    row = conn.execute("SELECT * FROM participants WHERE name_key = ?", (key,)).fetchone()
     if row:
-        conn.execute("UPDATE participants SET last_seen_at = ? WHERE id = ?", (now(), row["id"]))
-        return row["id"]
-    cur = conn.execute("INSERT INTO participants (pin, created_at, last_seen_at) VALUES (?, ?, ?)", (pin, now(), now()))
-    return cur.lastrowid
+        if not row["pin_hash"] or not check_password_hash(row["pin_hash"], pin):
+            return None, "That name is taken and the PIN doesn't match. Try the PIN again or pick another name."
+        participant_id = row["id"]
+    else:
+        pin_hash = generate_password_hash(pin, method=PIN_HASH_METHOD)
+        legacy = conn.execute("SELECT id FROM participants WHERE pin = ? AND name_key IS NULL", (pin,)).fetchone()
+        if legacy:
+            participant_id = legacy["id"]
+        else:
+            participant_id = conn.execute(
+                "INSERT INTO participants (pin, created_at, last_seen_at) VALUES (?, ?, ?)", (f"name:{key}", now(), now())
+            ).lastrowid
+        conn.execute(
+            "UPDATE participants SET name = ?, name_key = ?, pin_hash = ?, pin = ? WHERE id = ?",
+            (name, key, pin_hash, f"name:{participant_id}", participant_id),
+        )
+    conn.execute("UPDATE participants SET last_seen_at = ?, login_count = login_count + 1 WHERE id = ?", (now(), participant_id))
+    return participant_id, ""
+
+
+def logged_in_participant(conn):
+    participant_id = session.get("participant_id")
+    if participant_id and conn.execute("SELECT 1 FROM participants WHERE id = ?", (participant_id,)).fetchone():
+        return participant_id
+    session.pop("participant_id", None)
+    session.pop("participant_name", None)
+    return None
+
+
+def safe_next(value):
+    value = value or "/"
+    return value if value.startswith("/") and not value.startswith("//") else "/"
+
+
+def login_form(next_path, error="", name=""):
+    error_html = f"<div class='error'>{escape(error)}</div>" if error else ""
+    return (
+        "<h1>Who's playing?</h1><p class='muted'>Pick a name and a PIN (4+ letters or numbers). Use the same name and PIN next time to keep your quiz progress, drink tokens and high scores. Only your name is ever shown.</p>"
+        f"{error_html}<form method='post' action='{escape(url_for('login'))}'><input type='hidden' name='next' value='{escape(next_path)}'>"
+        f"<input name='name' maxlength='{PLAYER_NAME_MAX_LENGTH}' required placeholder='Your name' value='{escape(name)}'>"
+        "<input name='pin' type='password' maxlength='20' minlength='4' required pattern='[A-Za-z0-9]+' placeholder='PIN'>"
+        "<button class='btn btn-ok' type='submit'>Continue</button></form><a class='btn btn-sec' href='/'>Back to Menu</a>"
+    )
+
+
+def player_line():
+    name = session.get("participant_name")
+    if name:
+        return f"<p>Playing as <strong>{escape(name)}</strong> · <a href='/logout'>switch player</a></p>"
+    return "<p><a href='/login'>Sign in with your name and PIN</a></p>"
 
 
 def next_question_number(conn):
@@ -522,10 +648,10 @@ def dopewars_finish_run(state, participant_id, reason):
 def dopewars_leaderboard(conn, limit=10):
     return conn.execute(
         """
-        SELECT p.pin, ds.top_score, ds.achieved_at
+        SELECT ds.participant_id, COALESCE(p.name, 'Player ' || p.id) AS name, ds.top_score, ds.achieved_at
         FROM dopewars_scores ds
         JOIN participants p ON p.id = ds.participant_id
-        ORDER BY ds.top_score DESC, ds.achieved_at ASC, p.pin ASC
+        ORDER BY ds.top_score DESC, ds.achieved_at ASC, name ASC
         LIMIT ?
         """,
         (limit,),
@@ -651,6 +777,36 @@ def health():
     return {"ok": True, "service": "CottonFlatBarQuiz"}, 200
 
 
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    next_path = safe_next(request.values.get("next"))
+    if request.method == "GET":
+        return page("Who's playing?", login_form(next_path))
+    name = normalize_player_name(request.form.get("name"))
+    pin = normalize_pin(request.form.get("pin"))
+    if not name:
+        return page("Who's playing?", login_form(next_path, "Please enter a name."))
+    if len(pin) < MIN_PIN_LENGTH:
+        return page("Who's playing?", login_form(next_path, "Use at least 4 letters or numbers for the PIN.", name))
+    with closing(db_conn()) as conn:
+        participant_id, error = participant_login(conn, name, pin)
+        if error:
+            return page("Who's playing?", login_form(next_path, error, name))
+        display_name = conn.execute("SELECT name FROM participants WHERE id = ?", (participant_id,)).fetchone()["name"]
+        conn.commit()
+    session.pop("dopewars_state", None)
+    session["participant_id"] = participant_id
+    session["participant_name"] = display_name
+    return redirect(next_path)
+
+
+@app.route("/logout")
+def player_logout():
+    for key in ("participant_id", "participant_name", "participant_pin", "dopewars_state"):
+        session.pop(key, None)
+    return redirect(url_for("menu"))
+
+
 @app.route("/")
 def menu():
     with closing(db_conn()) as conn:
@@ -658,6 +814,7 @@ def menu():
     body = [
         "<h1>🍺 Cotton Flat Bar Quiz</h1>",
         "<p class='muted'>Funny sociology, questionable opinions, and community data.</p>",
+        player_line(),
         "<a class='btn btn-ok' href='/quiz'>▶ Take Quiz</a>",
         "<a class='btn btn-sec' href='/submit-question'>✍ Submit Question</a>",
         "<a class='btn btn-sec' href='/answers'>📊 Community Answers</a>",
@@ -668,10 +825,10 @@ def menu():
         "<div class='question left'><h2>🕹 Dopewars</h2><p>Classic text-based street trading across NYC.</p><a class='btn btn-ok' href='/games/dopewars'>Play Dopewars</a><h3>High Scores</h3>",
     ]
     if dopewars_scores:
-        body.append("<table class='table'><tr><th>#</th><th>PIN</th><th>Top Score</th><th>Date</th></tr>")
+        body.append("<table class='table'><tr><th>#</th><th>Player</th><th>Top Score</th><th>Date</th></tr>")
         for index, row in enumerate(dopewars_scores, 1):
             body.append(
-                f"<tr><td>{index}</td><td>{escape(row['pin'])}</td><td>${row['top_score']}</td><td>{escape((row['achieved_at'] or '').replace('T', ' '))}</td></tr>"
+                f"<tr><td>{index}</td><td>{escape(row['name'])}</td><td>${row['top_score']}</td><td>{escape((row['achieved_at'] or '').replace('T', ' '))}</td></tr>"
             )
         body.append("</table>")
     else:
@@ -689,42 +846,48 @@ table{border-collapse:collapse;font-size:4vh;min-width:60vw}td,th{padding:1.2vh 
 th{color:#a7b0c0;font-size:2.8vh}td.score{color:#80efad;font-weight:bold;text-align:right}tr.first td{color:#ffd54a}
 .timer{font-size:22vh;font-weight:bold;color:#ffd54a;line-height:1}.art{max-height:62vh;max-width:90vw;border-radius:12px;background:#fff;margin:1vh 0}
 .chips{display:flex;flex-wrap:wrap;gap:1.5vh;justify-content:center;margin:3vh 0}.chip{background:#6a3fb5;padding:1.2vh 2.5vw;border-radius:999px;font-size:3.5vh}
+.grid{display:flex;flex-wrap:wrap;gap:3vh;justify-content:center;margin:2vh 0}.cell{position:relative}.cell img{height:30vh;max-width:28vw;background:#fff;border-radius:10px}.cell img.win{height:55vh;max-width:80vw}.num{position:absolute;top:-1.5vh;left:-1.5vh;background:#ffd54a;color:#111;font-weight:bold;font-size:5vh;border-radius:999px;padding:0 2vh}
 </style></head><body><div id='app'><h1>🍺 Cotton Flat Bar Quiz</h1></div>
 <script>
 const app = document.getElementById('app');
 function esc(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
+const BOARD_MS = 12000;
+function fmtScore(b, v){ return (b.unit=='$' ? '$' : '') + Number(v).toLocaleString(); }
 function renderScores(st){
-  let h = "<h1>🕹 Dopewars High Scores</h1>";
-  if(!st.scores.length){h += "<p class='muted'>No scores yet. Join the Wi-Fi <b>Cotton Flat Bar Quiz</b> and play Dopewars!</p>";}
-  else{
-    h += "<table><tr><th>#</th><th>Player</th><th style='text-align:right'>Top Score</th></tr>";
-    st.scores.forEach((r,i)=>{h += `<tr class='${i==0?"first":""}'><td>${i+1}</td><td>${esc(r.name)}</td><td class='score'>$${Number(r.score).toLocaleString()}</td></tr>`;});
-    h += "</table>";
-  }
-  h += "<p class='muted'>Join the Wi-Fi “Cotton Flat Bar Quiz” to play</p>";
+  const boards = st.boards.filter(b=>b.rows.length || b.message);
+  if(!boards.length) return "<h1>Cotton Flat Bar Quiz</h1><p class='muted'>No scores yet. Join the Wi-Fi <b>Cotton Flat Bar Quiz</b> and play!</p>";
+  const pick = Math.floor(Date.now()/BOARD_MS) % boards.length;
+  const b = boards[pick];
+  if(b.message) return `<h1>${esc(b.title)}</h1><p style='font-size:5vh;white-space:pre-wrap'>${esc(b.message)}</p><p class='muted'>${pick+1}/${boards.length}</p>`;
+  let h = `<h1>${esc(b.title)}</h1><table><tr><th>#</th><th>Player</th><th style='text-align:right'>${esc(b.label)}</th></tr>`;
+  b.rows.forEach((r,i)=>{h += `<tr class='${i==0?"first":""}'><td>${i+1}</td><td>${esc(r.name)}</td><td class='score'>${fmtScore(b, r.score)}</td></tr>`;});
+  h += "</table>";
+  if(b.note) h += `<p class='muted'>${esc(b.note)}</p>`;
+  h += `<p class='muted'>Join the Wi-Fi Cotton Flat Bar Quiz to play · ${pick+1}/${boards.length}</p>`;
   return h;
 }
 let deadline = 0, lastHtml = '';
 function fmt(sec){sec=Math.max(0,Math.ceil(sec));return Math.floor(sec/60)+':'+String(sec%60).padStart(2,'0');}
 function renderDrawing(st){
-  let h = "<h2>🎨 Drawing with Friends</h2>";
-  if(st.phase=='lobby'){
-    h += "<h1>New round starting!</h1><p class='muted'>On your phone: Wi-Fi “Cotton Flat Bar Quiz” → Drawing with Friends</p>";
-    h += "<div class='chips'>" + st.players.map(n=>`<span class='chip'>${esc(n)}</span>`).join('') + "</div>";
-    h += `<p class='muted'>${st.players.length} player${st.players.length==1?'':'s'} in · waiting for someone to press Start</p>`;
+  let h = "<h2>Drawing with Friends</h2>";
+  if(st.phase=='prep'){
+    h += `<h1>Get ready to draw: &ldquo;${esc(st.prompt)}&rdquo;</h1><div id='timer' class='timer'></div><p class='muted'>${st.players.map(esc).join(' &middot; ')}</p>`;
   }else if(st.phase=='drawing'){
-    h += `<h1>Draw: “${esc(st.prompt)}”</h1><div id='timer' class='timer'></div>`;
-    h += `<p class='muted'>${st.submitted} of ${st.players.length} drawings in</p>`;
-  }else if(st.phase=='reveal'){
-    const r = st.reveal;
-    h += `<p class='muted'>“${esc(st.prompt)}”</p><img class='art' src='/games/drawing/image/${r.entry_id}'>`;
-    h += `<h1>by ${esc(r.nickname)}</h1><p class='muted'>${r.index} of ${r.total}</p>`;
+    h += `<h1>Draw: &ldquo;${esc(st.prompt)}&rdquo;</h1><div id='timer' class='timer'></div><p class='muted'>${st.submitted} of ${st.players.length} drawings in</p>`;
+  }else if(st.phase=='voting'){
+    h += `<h1>Vote on your phone! &ldquo;${esc(st.prompt)}&rdquo;</h1><div class='grid'>`;
+    h += st.drawings.map(d=>`<div class='cell'><img src='/games/drawing/image/${d.entry_id}'><span class='num'>${d.number}</span></div>`).join('');
+    h += `</div><p class='muted'>${st.votes_in} of ${st.voters} votes in &middot; <span id='timer'></span></p>`;
+  }else if(st.phase=='results'){
+    if(st.winners.length){ h += "<div class='grid'>" + st.winners.map(w=>`<div class='cell'><img class='win' src='/games/drawing/image/${w.entry_id}'><span class='num'>${w.number}</span><h1>${esc(w.name)} wins! +1 point</h1></div>`).join('') + "</div>"; }
+    else { h += "<h1>No votes this round</h1>"; }
+    h += "<p class='muted'>" + st.standings.map(s=>`${esc(s.name)}: ${s.points}`).join(' &middot; ') + "</p>";
   }
   return h;
 }
 function render(st){
   const html = st.mode=='drawing' ? renderDrawing(st) : renderScores(st);
-  if(st.mode=='drawing' && st.phase=='drawing') deadline = Date.now() + st.seconds_left*1000;
+  if(st.mode=='drawing') deadline = Date.now() + st.seconds_left*1000;
   if(html !== lastHtml){ app.innerHTML = html; lastHtml = html; }
   tick();
 }
@@ -739,8 +902,37 @@ poll();
 </script></body></html>"""
 
 
-def tv_scores(conn):
-    return [{"name": row["pin"], "score": row["top_score"]} for row in dopewars_leaderboard(conn)]
+def mvp_leaderboard(conn, limit=10):
+    return conn.execute(
+        "SELECT COALESCE(name, 'Player ' || id) AS name, login_count FROM participants WHERE login_count > 0 ORDER BY login_count DESC, last_seen_at DESC LIMIT ?",
+        (limit,),
+    ).fetchall()
+
+
+def tv_builtin_boards(conn):
+    return [
+        {"title": "Dopewars High Scores", "label": "Top Score", "unit": "$", "rows": [{"name": row["name"], "score": row["top_score"]} for row in dopewars_leaderboard(conn)]},
+        {"title": "MVPs: Most Visits", "label": "Visits", "unit": "", "rows": [{"name": row["name"], "score": row["login_count"]} for row in mvp_leaderboard(conn)]},
+        {"title": "Drawing with Friends Scores", "label": "Points", "unit": "", "rows": [{"name": row["name"], "score": row["points"]} for row in drawing_standings(conn)]},
+    ]
+
+
+TV_BOARD_KEYS = ("dopewars", "mvp", "drawing")
+
+
+def tv_boards(conn, include_hidden=False):
+    settings = {row["key"]: row for row in conn.execute("SELECT * FROM tv_screens")}
+    boards = []
+    for key, board in zip(TV_BOARD_KEYS, tv_builtin_boards(conn)):
+        saved = settings.get(key)
+        board.update({"key": key, "enabled": bool(saved["enabled"]) if saved else True})
+        if saved and saved["title"]:
+            board["title"] = saved["title"]
+        if board["enabled"] or include_hidden:
+            boards.append(board)
+    for message in conn.execute("SELECT * FROM tv_messages ORDER BY id"):
+        boards.append({"key": f"message{message['id']}", "id": message["id"], "title": message["title"], "message": message["body"], "rows": [], "enabled": True})
+    return boards
 
 
 @app.route("/tv")
@@ -754,7 +946,7 @@ def tv_state():
         state = drawing_state(conn)
         if state["phase"] != "none":
             return {"mode": "drawing", **state}
-        return {"mode": "scores", "scores": tv_scores(conn)}
+        return {"mode": "scores", "boards": tv_boards(conn)}
 
 
 def clock():
@@ -773,72 +965,121 @@ def drawing_end_round(conn, round_id, status):
     conn.commit()
 
 
+def drawing_reload(conn, round_id):
+    return conn.execute("SELECT * FROM drawing_rounds WHERE id = ?", (round_id,)).fetchone()
+
+
+def drawing_award(conn, rnd, current):
+    claimed = conn.execute(
+        "UPDATE drawing_rounds SET results_started_at = ? WHERE id = ? AND results_started_at IS NULL", (current, rnd["id"])
+    ).rowcount
+    if claimed:
+        tally = conn.execute("SELECT entry_id, COUNT(*) AS votes FROM drawing_votes WHERE round_id = ? GROUP BY entry_id", (rnd["id"],)).fetchall()
+        top = max((row["votes"] for row in tally), default=0)
+        winners = [row["entry_id"] for row in tally if top and row["votes"] == top]
+        for entry_id in winners:
+            conn.execute(
+                "UPDATE drawing_players SET points = points + 1 WHERE player_token = (SELECT player_token FROM drawing_entries WHERE id = ?)",
+                (entry_id,),
+            )
+        conn.execute("UPDATE drawing_rounds SET winners = ? WHERE id = ?", (json.dumps(winners), rnd["id"]))
+    conn.commit()
+    return drawing_reload(conn, rnd["id"])
+
+
 def drawing_current_round(conn):
     """Return (round, entries, phase) for the running round, advancing it by the clock; None when idle."""
     rnd = conn.execute("SELECT * FROM drawing_rounds WHERE status IN ('lobby', 'drawing') ORDER BY id DESC LIMIT 1").fetchone()
     if not rnd:
         return None
+    if rnd["status"] == "lobby" or rnd["prep_ends_at"] is None:
+        drawing_end_round(conn, rnd["id"], "expired")
+        return None
     current = clock()
     entries = drawing_entries(conn, rnd["id"])
-    if rnd["status"] == "lobby":
-        if current - rnd["created_at"] > DRAWING_LOBBY_TIMEOUT_SECONDS:
-            drawing_end_round(conn, rnd["id"], "expired")
-            return None
-        return rnd, entries, "lobby"
+    if current < rnd["prep_ends_at"]:
+        return rnd, entries, "prep"
     submitted = [entry for entry in entries if entry["submitted_at"] is not None]
-    reveal_start = rnd["reveal_started_at"]
-    if reveal_start is None:
+    if rnd["vote_started_at"] is None:
         everyone_done = bool(entries) and len(submitted) == len(entries)
         if not everyone_done and current < rnd["draw_ends_at"] + DRAWING_SUBMIT_GRACE_SECONDS:
             return rnd, entries, "drawing"
-        reveal_start = current
-        conn.execute("UPDATE drawing_rounds SET reveal_started_at = ? WHERE id = ?", (reveal_start, rnd["id"]))
+        if not submitted:
+            drawing_end_round(conn, rnd["id"], "done")
+            return None
+        conn.execute("UPDATE drawing_rounds SET vote_started_at = ? WHERE id = ? AND vote_started_at IS NULL", (current, rnd["id"]))
         conn.commit()
-        rnd = conn.execute("SELECT * FROM drawing_rounds WHERE id = ?", (rnd["id"],)).fetchone()
-    if current >= reveal_start + DRAWING_REVEAL_SECONDS * len(submitted):
+        rnd = drawing_reload(conn, rnd["id"])
+    if rnd["results_started_at"] is None:
+        votes = conn.execute("SELECT COUNT(*) FROM drawing_votes WHERE round_id = ?", (rnd["id"],)).fetchone()[0]
+        voters = conn.execute("SELECT COUNT(*) FROM drawing_players").fetchone()[0]
+        if votes < voters and current < rnd["vote_started_at"] + DRAWING_VOTE_SECONDS:
+            return rnd, entries, "voting"
+        rnd = drawing_award(conn, rnd, current)
+    if current >= rnd["results_started_at"] + DRAWING_RESULTS_SECONDS:
         drawing_end_round(conn, rnd["id"], "done")
         return None
-    return rnd, entries, "reveal"
+    return rnd, entries, "results"
 
 
-def drawing_state(conn, player_token=None):
+def drawing_standings(conn):
+    rows = conn.execute("SELECT nickname, points FROM drawing_players ORDER BY points DESC, joined_at ASC")
+    return [{"name": row["nickname"], "points": row["points"]} for row in rows]
+
+
+def drawing_expire_table(conn):
+    last = conn.execute(
+        "SELECT MAX(t) FROM (SELECT MAX(joined_at) AS t FROM drawing_players UNION ALL SELECT MAX(COALESCE(ended_at, created_at)) FROM drawing_rounds)"
+    ).fetchone()[0]
+    if last is not None and clock() - last > DRAWING_LOBBY_TIMEOUT_SECONDS:
+        conn.execute("DELETE FROM drawing_players")
+        conn.commit()
+
+
+def drawing_state(conn, player_token=""):
     current_round = drawing_current_round(conn)
     if not current_round:
-        return {"phase": "none"}
+        drawing_expire_table(conn)
+    standings = drawing_standings(conn)
+    joined = bool(player_token) and conn.execute("SELECT 1 FROM drawing_players WHERE player_token = ?", (player_token,)).fetchone() is not None
+    state = {"phase": "none", "standings": standings, "joined": joined, "signed_in": bool(player_token), "in_round": False}
+    if not current_round:
+        return state
     rnd, entries, phase = current_round
-    current = clock()
-    submitted = [entry for entry in entries if entry["submitted_at"] is not None]
     me = next((entry for entry in entries if player_token and entry["player_token"] == player_token), None)
-    state = {
+    submitted = [entry for entry in entries if entry["submitted_at"] is not None]
+    ends_at = {
+        "prep": rnd["prep_ends_at"],
+        "drawing": rnd["draw_ends_at"],
+        "voting": (rnd["vote_started_at"] or 0) + DRAWING_VOTE_SECONDS,
+        "results": (rnd["results_started_at"] or 0) + DRAWING_RESULTS_SECONDS,
+    }[phase]
+    state.update({
         "phase": phase,
         "round_id": rnd["id"],
-        "prompt": rnd["prompt"] if phase != "lobby" else "",
+        "prompt": rnd["prompt"],
         "players": [entry["nickname"] for entry in entries],
         "submitted": len(submitted),
-        "joined": me is not None,
+        "in_round": me is not None,
         "my_submitted": bool(me and me["submitted_at"] is not None),
-        "my_name": me["nickname"] if me else "",
-    }
-    if phase == "drawing":
-        state["seconds_left"] = max(0, int(math.ceil(rnd["draw_ends_at"] - current)))
-    elif phase == "reveal":
-        elapsed = current - rnd["reveal_started_at"]
-        index = min(int(elapsed // DRAWING_REVEAL_SECONDS), len(submitted) - 1)
-        entry = submitted[index]
-        state["reveal"] = {
-            "index": index + 1,
-            "total": len(submitted),
-            "nickname": entry["nickname"],
-            "entry_id": entry["id"],
-            "seconds_left": max(1, int(math.ceil(DRAWING_REVEAL_SECONDS * (index + 1) - elapsed))),
-        }
+        "seconds_left": max(0, int(math.ceil(ends_at - clock()))),
+    })
+    if phase in ("voting", "results"):
+        votes = {row["voter_token"]: row["entry_id"] for row in conn.execute("SELECT voter_token, entry_id FROM drawing_votes WHERE round_id = ?", (rnd["id"],))}
+        tally = Counter(votes.values())
+        numbers = {entry["id"]: number for number, entry in enumerate(submitted, 1)}
+        winners = set(json.loads(rnd["winners"] or "[]"))
+        state["drawings"] = [{"number": numbers[e["id"]], "entry_id": e["id"], "mine": bool(player_token) and e["player_token"] == player_token} for e in submitted]
+        state["votes_in"] = len(votes)
+        state["voters"] = len(standings)
+        state["my_vote"] = numbers.get(votes.get(player_token))
+        state["winners"] = [{"number": numbers[e["id"]], "entry_id": e["id"], "name": e["nickname"], "votes": tally[e["id"]]} for e in submitted if e["id"] in winners]
     return state
 
 
 def drawing_token():
-    if not session.get("drawing_token"):
-        session["drawing_token"] = secrets.token_hex(8)
-    return session["drawing_token"]
+    participant_id = session.get("participant_id")
+    return f"p{participant_id}" if participant_id else ""
 
 
 def drawing_new_prompt(conn):
@@ -850,16 +1091,21 @@ def drawing_new_prompt(conn):
 def drawing_prune(conn):
     old_ids = [row["id"] for row in conn.execute("SELECT id FROM drawing_rounds ORDER BY id DESC LIMIT -1 OFFSET ?", (DRAWING_KEEP_ROUNDS,))]
     for round_id in old_ids:
+        conn.execute("DELETE FROM drawing_votes WHERE round_id = ?", (round_id,))
         conn.execute("DELETE FROM drawing_entries WHERE round_id = ?", (round_id,))
         conn.execute("DELETE FROM drawing_rounds WHERE id = ?", (round_id,))
 
 
-def drawing_join_form(error=""):
-    return (
-        f"{error}<form method='post' action='/games/drawing/join' class='form'>"
-        f"<input name='nickname' maxlength='{DRAWING_MAX_NAME_LENGTH}' required placeholder='Your name for the TV'>"
-        "<button class='btn btn-ok' type='submit'>Join</button></form>"
-    )
+def drawing_standings_html(state):
+    rows = state.get("standings") or []
+    if not rows:
+        return ""
+    cells = "".join(f"<tr><td>{escape(row['name'])}</td><td>{row['points']}</td></tr>" for row in rows)
+    return f"<h3>Scores</h3><table class='table'><tr><th>Player</th><th>Points</th></tr>{cells}</table>"
+
+
+def drawing_button(action, label, style="btn-ok", fields=""):
+    return f"<form method='post' action='{action}'>{fields}<button class='btn {style}' type='submit'>{escape(label)}</button></form>"
 
 
 DRAWING_PAD = """
@@ -898,47 +1144,69 @@ tick(); setInterval(tick, 500);
 
 
 def drawing_page_key(state):
-    reveal = state.get("reveal") or {}
-    return f"{state['phase']}|{state.get('round_id', '')}|{state.get('joined', '')}|{state.get('my_submitted', '')}|{reveal.get('index', '')}"
+    return f"{state['phase']}|{state.get('round_id', '')}|{state['joined']}|{state['in_round']}|{state.get('my_submitted', '')}|{state.get('my_vote', '')}|{len(state['standings'])}"
 
 
 def drawing_render_body(state, error=""):
     phase = state["phase"]
-    players = ", ".join(escape(name) for name in state.get("players", [])) or "nobody yet"
-    body = ["<h1>🎨 Drawing with Friends</h1>"]
-    if phase == "none":
-        body.append(f"<p class='muted'>Everyone gets the same funny prompt and {DRAWING_SECONDS // 60} minutes to draw it. Then each drawing is shown on the TV for {DRAWING_REVEAL_SECONDS} seconds.</p>")
-        body.append("<form method='post' action='/games/drawing/new'><button class='btn btn-ok' type='submit'>Start a New Round</button></form>")
-    elif phase == "lobby":
-        if state["joined"]:
-            body.append(f"<div class='notice'>You're in as <strong>{escape(state['my_name'])}</strong>. The prompt appears when drawing starts.</div>")
-            body.append(f"<p>Players: {players}</p>")
-            body.append("<form method='post' action='/games/drawing/start'><button class='btn btn-ok' type='submit'>Everyone's In - Start Drawing!</button></form>")
+    prompt = escape(state.get("prompt", ""))
+    body = ["<h1>&#127912; Drawing with Friends</h1>", error]
+    rules = (
+        f"<p class='muted'>Everyone gets the same prompt: {DRAWING_PREP_SECONDS} seconds to get ready, {DRAWING_SECONDS} seconds to draw, "
+        "then everyone votes for their favourite numbered drawing. The winner gets 1 point. Scores reset when a new player joins.</p>"
+    )
+    if not state["signed_in"]:
+        body.append(rules + "<a class='btn btn-ok' href='/login?next=/games/drawing'>Sign in to play</a>")
+    elif not state["joined"]:
+        body.append(rules + drawing_button("/games/drawing/join", "Join the Game" if phase == "none" else "Join - you'll play next round"))
+    if phase == "none" and state["joined"]:
+        body.append(f"<p>At the table: {', '.join(escape(row['name']) for row in state['standings'])}</p>")
+        body.append(drawing_button("/games/drawing/start", "Everyone's In - Start Round!"))
+    elif phase == "prep":
+        if state["in_round"]:
+            body.append(f"<h2>Get ready to draw: &ldquo;{prompt}&rdquo;</h2><p class='muted'>Drawing starts in {state['seconds_left']} seconds...</p>")
         else:
-            body.append(f"<p>A round is about to start. Players so far: {players}</p>")
-            body.append(drawing_join_form(error))
+            body.append("<p>A round is starting. Watch the TV!</p>")
     elif phase == "drawing":
-        if state["joined"] and not state["my_submitted"]:
-            body.append(f"<h2>Draw: “{escape(state['prompt'])}”</h2>")
+        if state["in_round"] and not state["my_submitted"]:
+            body.append(f"<h2>Draw: &ldquo;{prompt}&rdquo;</h2>")
             body.append(DRAWING_PAD.replace("SECONDS_LEFT", str(state["seconds_left"])))
-        elif state["joined"]:
+        elif state["in_round"]:
             body.append(f"<div class='notice'>Drawing sent! Waiting for the others ({state['submitted']} of {len(state['players'])} in).</div>")
-        elif state["seconds_left"] > DRAWING_LATE_JOIN_MIN_SECONDS:
-            body.append(f"<p>A round is underway ({state['seconds_left']} seconds left). Jump in and draw with the time that's left:</p>")
-            body.append(drawing_join_form(error))
         else:
-            body.append("<p>This round is almost over. Watch the TV and join the next one!</p>")
-    elif phase == "reveal":
-        reveal = state["reveal"]
-        body.append(f"<h2>Look at the TV! “{escape(state['prompt'])}”</h2>")
-        body.append(f"<img src='/games/drawing/image/{reveal['entry_id']}' style='width:100%;border-radius:8px;background:#fff'>")
-        body.append(f"<p>by <strong>{escape(reveal['nickname'])}</strong> · {reveal['index']} of {reveal['total']}</p>")
+            body.append(f"<p>A round is underway: &ldquo;{prompt}&rdquo;. Watch the TV!</p>")
+    elif phase == "voting":
+        body.append(f"<h2>Vote for your favourite: &ldquo;{prompt}&rdquo;</h2>")
+        if state["my_vote"]:
+            body.append(f"<div class='notice'>You voted for #{state['my_vote']}. Tap another number to change it.</div>")
+        body.append(f"<p class='muted'>{state['votes_in']} of {state['voters']} votes in &middot; about {state['seconds_left']} seconds left</p>")
+        only_one = len(state["drawings"]) == 1
+        for drawing in state["drawings"]:
+            body.append(f"<div class='question left'><img src='/games/drawing/image/{drawing['entry_id']}' style='width:100%;border-radius:8px;background:#fff'>")
+            if state["joined"] and (only_one or not drawing["mine"]):
+                field = f"<input type='hidden' name='number' value='{drawing['number']}'>"
+                body.append(drawing_button("/games/drawing/vote", f"Vote #{drawing['number']}", fields=field))
+            else:
+                body.append(f"<strong>#{drawing['number']}{' (yours)' if drawing['mine'] else ''}</strong>")
+            body.append("</div>")
+    elif phase == "results":
+        for winner in state["winners"]:
+            body.append(f"<h2>#{winner['number']} by {escape(winner['name'])} wins! +1 point</h2>")
+            body.append(f"<img src='/games/drawing/image/{winner['entry_id']}' style='width:100%;border-radius:8px;background:#fff'>")
+        if not state["winners"]:
+            body.append("<h2>No votes this round, so no points.</h2>")
+    if state["joined"] and not state["in_round"] and phase != "none":
+        body.append("<div class='notice'>You're in for the next round.</div>")
+    body.append(drawing_standings_html(state))
+    drawing_now = phase == "drawing" and state["in_round"] and not state.get("my_submitted")
+    if state["joined"] and not drawing_now:
+        body.append(drawing_button("/games/drawing/leave", "Leave the Game", "btn-sec small"))
     body.append("<a class='btn btn-sec' href='/'>Back to Menu</a>")
-    if phase != "drawing" or not state.get("joined") or state.get("my_submitted"):
+    if not drawing_now:
         body.append(
             "<script>const KEY = " + json.dumps(drawing_page_key(state)) + ";"
             "setInterval(async () => { try { const r = await fetch('/games/drawing/state', {cache: 'no-store'}); const s = await r.json();"
-            " if (s.key !== KEY) location.reload(); } catch (e) {} }, 3000);</script>"
+            " if (s.key !== KEY) location.reload(); } catch (e) {} }, 2000);</script>"
         )
     return "".join(body)
 
@@ -958,34 +1226,28 @@ def drawing_game_state():
     return state
 
 
-@app.route("/games/drawing/new", methods=["POST"])
-def drawing_new():
+@app.route("/games/drawing/join", methods=["POST"])
+def drawing_join():
     with closing(db_conn()) as conn:
-        if not drawing_current_round(conn):
-            drawing_prune(conn)
-            conn.execute("INSERT INTO drawing_rounds (prompt, status, created_at) VALUES (?, 'lobby', ?)", (drawing_new_prompt(conn), clock()))
-            conn.commit()
+        participant_id = logged_in_participant(conn)
+        if not participant_id:
+            return redirect(url_for("login", next=url_for("drawing_game")))
+        name = conn.execute("SELECT COALESCE(name, 'Player ' || id) FROM participants WHERE id = ?", (participant_id,)).fetchone()[0]
+        added = conn.execute(
+            "INSERT OR IGNORE INTO drawing_players (player_token, participant_id, nickname, joined_at) VALUES (?, ?, ?, ?)",
+            (drawing_token(), participant_id, name, clock()),
+        ).rowcount
+        if added:
+            conn.execute("UPDATE drawing_players SET points = 0")
+        conn.commit()
     return redirect(url_for("drawing_game"))
 
 
-@app.route("/games/drawing/join", methods=["POST"])
-def drawing_join():
-    token = drawing_token()
-    nickname = re.sub(r"\s+", " ", request.form.get("nickname", "")).strip()[:DRAWING_MAX_NAME_LENGTH]
+@app.route("/games/drawing/leave", methods=["POST"])
+def drawing_leave():
     with closing(db_conn()) as conn:
-        current_round = drawing_current_round(conn)
-        if not nickname:
-            state = drawing_state(conn, token)
-            return page("Drawing with Friends", drawing_render_body(state, "<div class='error'>Please enter a name.</div>"))
-        if current_round:
-            rnd, _entries, phase = current_round
-            can_join = phase == "lobby" or (phase == "drawing" and rnd["draw_ends_at"] - clock() > DRAWING_LATE_JOIN_MIN_SECONDS)
-            if can_join:
-                conn.execute(
-                    "INSERT OR IGNORE INTO drawing_entries (round_id, player_token, nickname, joined_at) VALUES (?, ?, ?, ?)",
-                    (rnd["id"], token, nickname, clock()),
-                )
-                conn.commit()
+        conn.execute("DELETE FROM drawing_players WHERE player_token = ?", (drawing_token(),))
+        conn.commit()
     return redirect(url_for("drawing_game"))
 
 
@@ -993,11 +1255,17 @@ def drawing_join():
 def drawing_start():
     token = drawing_token()
     with closing(db_conn()) as conn:
-        current_round = drawing_current_round(conn)
-        if current_round and current_round[2] == "lobby" and any(entry["player_token"] == token for entry in current_round[1]):
+        seated = token and conn.execute("SELECT 1 FROM drawing_players WHERE player_token = ?", (token,)).fetchone()
+        if seated and not drawing_current_round(conn):
+            drawing_prune(conn)
+            start = clock()
+            round_id = conn.execute(
+                "INSERT INTO drawing_rounds (prompt, status, created_at, prep_ends_at, draw_ends_at) VALUES (?, 'drawing', ?, ?, ?)",
+                (drawing_new_prompt(conn), start, start + DRAWING_PREP_SECONDS, start + DRAWING_PREP_SECONDS + DRAWING_SECONDS),
+            ).lastrowid
             conn.execute(
-                "UPDATE drawing_rounds SET status = 'drawing', draw_ends_at = ? WHERE id = ? AND status = 'lobby'",
-                (clock() + DRAWING_SECONDS, current_round[0]["id"]),
+                "INSERT INTO drawing_entries (round_id, player_token, nickname, joined_at) SELECT ?, player_token, nickname, joined_at FROM drawing_players",
+                (round_id,),
             )
             conn.commit()
     return redirect(url_for("drawing_game"))
@@ -1025,6 +1293,22 @@ def drawing_submit():
         if cur.rowcount == 0:
             return {"ok": False, "error": "You are not in this round or already submitted."}, 409
     return {"ok": True}
+
+
+@app.route("/games/drawing/vote", methods=["POST"])
+def drawing_vote():
+    token = drawing_token()
+    number = parse_positive_int(request.form.get("number"))
+    with closing(db_conn()) as conn:
+        state = drawing_state(conn, token)
+        drawing = next((d for d in state.get("drawings", []) if d["number"] == number), None)
+        if state["phase"] == "voting" and state["joined"] and drawing and (not drawing["mine"] or len(state["drawings"]) == 1):
+            conn.execute(
+                "INSERT OR REPLACE INTO drawing_votes (round_id, voter_token, entry_id, voted_at) VALUES (?, ?, ?, ?)",
+                (state["round_id"], token, drawing["entry_id"], clock()),
+            )
+            conn.commit()
+    return redirect(url_for("drawing_game"))
 
 
 @app.route("/games/drawing/image/<int:entry_id>")
@@ -1066,11 +1350,11 @@ def gold_users():
         "<p class='muted'>Leaderboard for players earning the most drink tokens and answering the most questions.</p>",
     ]
     if participants:
-        body.append("<table class='table'><tr><th>#</th><th>PIN</th><th>Answered</th><th>Tokens ready</th><th>Tokens redeemed</th><th>Total tokens</th><th>Progress</th></tr>")
+        body.append("<table class='table'><tr><th>#</th><th>Player</th><th>Answered</th><th>Tokens ready</th><th>Tokens redeemed</th><th>Total tokens</th><th>Progress</th></tr>")
         for index, participant in enumerate(participants, 1):
             progress = participant["answered"] % TOKEN_MILESTONE
             body.append(
-                f"<tr><td>{index}</td><td>{escape(participant['pin'])}</td><td>{participant['answered']}</td>"
+                f"<tr><td>{index}</td><td>{escape(participant['name'])}</td><td>{participant['answered']}</td>"
                 f"<td>{participant['unredeemed']}</td><td>{participant['redeemed']}</td>"
                 f"<td>{participant['total_tokens']}</td><td>{progress}/{TOKEN_MILESTONE}</td></tr>"
             )
@@ -1083,28 +1367,10 @@ def gold_users():
 
 @app.route("/games/dopewars", methods=["GET", "POST"])
 def dopewars():
-    if request.method == "POST" and request.form.get("action") == "set_pin":
-        pin = normalize_pin(request.form.get("pin"))
-        if len(pin) < MIN_PIN_LENGTH:
-            body = "<h1>Enter your PIN</h1><p class='muted'>Use your quiz PIN so your Dopewars high score can be saved to your profile.</p><div class='error'>Use at least 4 letters or numbers.</div>" + pin_form(url_for("dopewars"), "Play Dopewars", "<input type='hidden' name='action' value='set_pin'>")
-            return page("Enter PIN", body)
-        with closing(db_conn()) as conn:
-            participant_id = participant_for_pin(conn, pin)
-            conn.commit()
-        session["participant_pin"] = pin
-        session["participant_id"] = participant_id
-        return redirect(url_for("dopewars"))
-
-    if not session.get("participant_pin"):
-        body = "<h1>Enter your PIN</h1><p class='muted'>Use your quiz PIN so your Dopewars high score can be saved to your profile.</p>" + pin_form(url_for("dopewars"), "Play Dopewars", "<input type='hidden' name='action' value='set_pin'>")
-        return page("Enter PIN", body)
-
-    participant_id = session.get("participant_id")
+    with closing(db_conn()) as conn:
+        participant_id = logged_in_participant(conn)
     if not participant_id:
-        with closing(db_conn()) as conn:
-            participant_id = participant_for_pin(conn, session["participant_pin"])
-            conn.commit()
-        session["participant_id"] = participant_id
+        return redirect(url_for("login", next=url_for("dopewars")))
 
     state = session.get("dopewars_state")
     if not isinstance(state, dict) or "cash" not in state:
@@ -1200,27 +1466,10 @@ def quiz():
         conn.close()
         return page("Take Quiz", "<h1>Take Quiz</h1><p>No approved questions yet.</p>")
 
-    if request.method == "POST" and not session.get("participant_pin"):
-        pin = normalize_pin(request.form.get("pin"))
-        if len(pin) < MIN_PIN_LENGTH:
-            conn.close()
-            return page("Enter PIN", "<h1>Enter your PIN</h1><div class='error'>Use at least 4 letters or numbers.</div>" + pin_form())
-        participant_id = participant_for_pin(conn, pin)
-        conn.commit()
-        conn.close()
-        session["participant_pin"] = pin
-        session["participant_id"] = participant_id
-        return redirect(url_for("quiz"))
-
-    if not session.get("participant_pin"):
-        conn.close()
-        return page("Enter PIN", "<h1>Enter your PIN</h1><p class='muted'>Use the same PIN each time so the host can track your answers and drink-token progress.</p>" + pin_form())
-
-    participant_id = session.get("participant_id")
+    participant_id = logged_in_participant(conn)
     if not participant_id:
-        participant_id = participant_for_pin(conn, session["participant_pin"])
-        conn.commit()
-        session["participant_id"] = participant_id
+        conn.close()
+        return redirect(url_for("login", next=url_for("quiz")))
 
     answered_ids = {
         row["question_id"]
@@ -1274,7 +1523,7 @@ def quiz():
             return complete_quiz_page("Your answer was saved.")
         return redirect(url_for("quiz", q=next_index))
 
-    body = f"<p class='muted'>Question {index + 1} of {len(questions)} · PIN {escape(session['participant_pin'])}</p><h1>Take Quiz</h1><div class='question left'><h3>{escape(strip_internal_round_labels(question['text']))}</h3><form method='post' action='{escape(url_for('quiz', q=index))}' class='left'>"
+    body = f"<p class='muted'>Question {index + 1} of {len(questions)} · Playing as {escape(session.get('participant_name') or '')} (<a href='/logout'>switch</a>)</p><h1>Take Quiz</h1><div class='question left'><h3>{escape(strip_internal_round_labels(question['text']))}</h3><form method='post' action='{escape(url_for('quiz', q=index))}' class='left'>"
     if question["is_open_text"]:
         body += "<input name='author' maxlength='80' placeholder='Your name (optional)'><textarea name='message' maxlength='2000' required placeholder='Type your answer here'></textarea>"
     else:
@@ -1285,16 +1534,11 @@ def quiz():
     return page("Take Quiz", body)
 
 
-def pin_form(action="", button_label="Start Quiz", hidden_fields=""):
-    action_attr = f" action='{escape(action)}'" if action else ""
-    return f"<form method='post'{action_attr}>{hidden_fields}<input name='pin' maxlength='20' minlength='4' required pattern='[A-Za-z0-9]+' placeholder='Enter your PIN'><button class='btn btn-ok' type='submit'>{escape(button_label)}</button></form>"
-
-
 def participant_stats(conn, sort_mode="admin"):
     order_by = {
-        "admin": "answered DESC, p.pin ASC",
-        "leaderboard": "total_tokens DESC, answered DESC, p.pin ASC",
-    }.get(sort_mode, "answered DESC, p.pin ASC")
+        "admin": "answered DESC, name ASC",
+        "leaderboard": "total_tokens DESC, answered DESC, name ASC",
+    }.get(sort_mode, "answered DESC, name ASC")
     return conn.execute(
         f"""
         WITH answered AS (
@@ -1311,7 +1555,8 @@ def participant_stats(conn, sort_mode="admin"):
             GROUP BY participant_id
         )
         SELECT p.id,
-               p.pin,
+               COALESCE(p.name, 'Player ' || p.id) AS name,
+               p.login_count,
                COALESCE(a.answered, 0) AS answered,
                COALESCE(t.unredeemed, 0) AS unredeemed,
                COALESCE(t.redeemed, 0) AS redeemed,
@@ -1373,6 +1618,39 @@ def submit_question():
     return question_form("Submit Question", url_for("submit_question"), {"is_open_text": 1}, error)
 
 
+def admin_tv_html(conn):
+    html = ["<h2>TV Screens</h2><p class='muted'>The TV rotates these every 12 seconds. Score boards with nobody on them are skipped.</p>"]
+    for board in tv_boards(conn, include_hidden=True):
+        if "message" in board:
+            html.append(
+                f"<div class='question left'><strong>{escape(board['title'])}</strong><p>{escape(board['message'])}</p>"
+                f"<form method='post' action='/admin/tv/message/{board['id']}/delete'><button class='btn btn-del small'>Remove Message Screen</button></form></div>"
+            )
+            continue
+        checked = " checked" if board["enabled"] else ""
+        html.append(
+            f"<div class='question left'><form method='post' action='/admin/tv/screen/{board['key']}' class='form'>"
+            f"<input name='title' maxlength='60' required value='{escape(board['title'])}'>"
+            f"<label class='choice'><input type='checkbox' name='enabled' value='1'{checked}> Show on TV</label>"
+            "<button class='btn btn-ok small' type='submit'>Save</button></form>"
+            f"<form method='post' action='/admin/tv/clear/{board['key']}' onsubmit=\"return confirm('Clear all of these scores?');\"><button class='btn btn-del small'>Clear Scores</button></form>"
+        )
+        if board["key"] == "dopewars":
+            for row in dopewars_leaderboard(conn):
+                html.append(
+                    f"<form method='post' action='/admin/dopewars-score/{row['participant_id']}/delete' class='admin-row'>"
+                    f"<span>{escape(row['name'])}: ${row['top_score']}</span><button class='btn btn-del small'>Remove</button></form>"
+                )
+        html.append("</div>")
+    html.append(
+        "<div class='question left'><strong>Add a Message Screen</strong><form method='post' action='/admin/tv/message' class='form'>"
+        "<input name='title' maxlength='60' required placeholder='Title, e.g. Tonight'>"
+        "<textarea name='body' maxlength='300' required placeholder='Message, e.g. $3 pints until 9'></textarea>"
+        "<button class='btn btn-ok small' type='submit'>Add to TV</button></form></div>"
+    )
+    return "".join(html)
+
+
 @app.route("/admin", methods=["GET", "POST"])
 def admin():
     if request.method == "POST" and request.form.get("action") == "login":
@@ -1387,12 +1665,13 @@ def admin():
         suggestions = conn.execute("SELECT * FROM suggestions ORDER BY id ASC").fetchall()
         questions = conn.execute("SELECT * FROM questions ORDER BY id DESC").fetchall()
         participants = participant_stats(conn)
-    body = "<h1>Host Admin</h1><a class='btn btn-ok' href='/admin/add-question'>Add Question</a><h2>Participant Drink Tokens</h2>"
+        tv_html = admin_tv_html(conn)
+    body = "<h1>Host Admin</h1><form method='post' action='/admin/play-as-host'><button class='btn btn-ok' type='submit'>Play as Host (quiz, Dopewars, drawing)</button></form><a class='btn btn-ok' href='/admin/add-question'>Add Question</a><h2>Participant Drink Tokens</h2>"
     if participants:
-        body += "<table class='table'><tr><th>PIN</th><th>Answered</th><th>Tokens ready</th><th>Given</th><th>Progress</th><th>Action</th></tr>"
+        body += "<table class='table'><tr><th>Player</th><th>Answered</th><th>Tokens ready</th><th>Given</th><th>Progress</th><th>Action</th></tr>"
         for participant in participants:
             progress = participant["answered"] % TOKEN_MILESTONE
-            body += f"<tr><td>{escape(participant['pin'])}</td><td>{participant['answered']}</td><td>{participant['unredeemed']}</td><td>{participant['redeemed']}</td><td>{progress}/{TOKEN_MILESTONE}</td><td><a class='btn btn-ok small' href='/admin/redeem-token/{participant['id']}'>Redeem</a></td></tr>"
+            body += f"<tr><td>{escape(participant['name'])}</td><td>{participant['answered']}</td><td>{participant['unredeemed']}</td><td>{participant['redeemed']}</td><td>{progress}/{TOKEN_MILESTONE}</td><td><a class='btn btn-ok small' href='/admin/redeem-token/{participant['id']}'>Redeem</a><form method='post' action='/admin/rename/{participant['id']}' class='admin-row'><input name='name' maxlength='{PLAYER_NAME_MAX_LENGTH}' required placeholder='New name' style='width:auto'><button class='btn btn-warn small'>Rename</button></form></td></tr>"
         body += "</table>"
     else:
         body += "<p class='muted'>No participants yet.</p>"
@@ -1408,9 +1687,115 @@ def admin():
     for question in questions:
         kind = "Free write" if question["is_open_text"] else "Multiple choice"
         body += f"<div class='question left'><strong>{escape(strip_internal_round_labels(question['text']))}</strong><p class='muted'>{kind} · Question {question['question_number']} · ID {question['id']}</p><div class='admin-row'><a class='btn btn-warn small' href='/admin/edit-question/{question['id']}'>Edit</a><form method='post' action='/admin/delete-question-number/{question['question_number']}' onsubmit=\"return confirm('Delete this question and all answers?');\"><button class='btn btn-del small'>Delete</button></form></div></div>"
+    body += tv_html
     body += "<h2>Drawing with Friends</h2><form method='post' action='/admin/drawing/end' onsubmit=\"return confirm('End the current drawing round?');\"><button class='btn btn-del small'>End Current Drawing Round</button></form>"
-    body += "<a class='btn btn-sec' href='/tv'>TV Screen</a><a class='btn btn-sec' href='/gold-users'>View Gold Users</a><a class='btn btn-sec' href='/admin/logout'>Log Out</a><a class='btn btn-sec' href='/'>Back to Menu</a>"
+    body += "<a class='btn btn-sec' href='/tv'>TV Screen</a><a class='btn btn-sec' href='/answers'>View Community Answers</a><a class='btn btn-sec' href='/gold-users'>View Gold Users</a><a class='btn btn-sec' href='/admin/logout'>Log Out</a><a class='btn btn-sec' href='/'>Back to Menu</a>"
     return page("Host Admin", body)
+
+
+@app.route("/admin/play-as-host", methods=["POST"])
+def admin_play_as_host():
+    denied = require_admin()
+    if denied:
+        return denied
+    with closing(db_conn()) as conn:
+        row = conn.execute("SELECT id, name FROM participants WHERE name_key = 'host'").fetchone()
+        if row:
+            participant_id, name = row["id"], row["name"]
+        else:
+            participant_id, name = conn.execute(
+                "INSERT INTO participants (pin, name, name_key, pin_hash, created_at, last_seen_at) VALUES ('host', 'Host', 'host', ?, ?, ?)",
+                (generate_password_hash(secrets.token_hex(16), method=PIN_HASH_METHOD), now(), now()),
+            ).lastrowid, "Host"
+        conn.commit()
+    session.pop("dopewars_state", None)
+    session["participant_id"] = participant_id
+    session["participant_name"] = name
+    return redirect(url_for("menu"))
+
+
+@app.route("/admin/rename/<int:participant_id>", methods=["POST"])
+def admin_rename(participant_id):
+    denied = require_admin()
+    if denied:
+        return denied
+    name = normalize_player_name(request.form.get("name"))
+    with closing(db_conn()) as conn:
+        taken = conn.execute("SELECT 1 FROM participants WHERE name_key = ? AND id != ?", (name.casefold(), participant_id)).fetchone()
+        if name and not taken:
+            conn.execute("UPDATE participants SET name = ?, name_key = ? WHERE id = ?", (name, name.casefold(), participant_id))
+            conn.execute("UPDATE drawing_players SET nickname = ? WHERE participant_id = ?", (name, participant_id))
+            conn.commit()
+    return redirect(url_for("admin"))
+
+
+@app.route("/admin/tv/screen/<key>", methods=["POST"])
+def admin_tv_screen(key):
+    denied = require_admin()
+    if denied:
+        return denied
+    if key in TV_BOARD_KEYS:
+        title = re.sub(r"\s+", " ", request.form.get("title", "")).strip()[:60]
+        with closing(db_conn()) as conn:
+            conn.execute(
+                "INSERT INTO tv_screens (key, title, enabled) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET title = excluded.title, enabled = excluded.enabled",
+                (key, title, 1 if request.form.get("enabled") else 0),
+            )
+            conn.commit()
+    return redirect(url_for("admin"))
+
+
+@app.route("/admin/tv/clear/<key>", methods=["POST"])
+def admin_tv_clear(key):
+    denied = require_admin()
+    if denied:
+        return denied
+    statement = {
+        "dopewars": "DELETE FROM dopewars_scores",
+        "mvp": "UPDATE participants SET login_count = 0",
+        "drawing": "UPDATE drawing_players SET points = 0",
+    }.get(key)
+    if statement:
+        with closing(db_conn()) as conn:
+            conn.execute(statement)
+            conn.commit()
+    return redirect(url_for("admin"))
+
+
+@app.route("/admin/dopewars-score/<int:participant_id>/delete", methods=["POST"])
+def admin_delete_dopewars_score(participant_id):
+    denied = require_admin()
+    if denied:
+        return denied
+    with closing(db_conn()) as conn:
+        conn.execute("DELETE FROM dopewars_scores WHERE participant_id = ?", (participant_id,))
+        conn.commit()
+    return redirect(url_for("admin"))
+
+
+@app.route("/admin/tv/message", methods=["POST"])
+def admin_tv_message():
+    denied = require_admin()
+    if denied:
+        return denied
+    title = request.form.get("title", "").strip()[:60]
+    text = request.form.get("body", "").strip()[:300]
+    if title and text:
+        with closing(db_conn()) as conn:
+            conn.execute("INSERT INTO tv_messages (title, body) VALUES (?, ?)", (title, text))
+            conn.commit()
+    return redirect(url_for("admin"))
+
+
+@app.route("/admin/tv/message/<int:message_id>/delete", methods=["POST"])
+def admin_tv_message_delete(message_id):
+    denied = require_admin()
+    if denied:
+        return denied
+    with closing(db_conn()) as conn:
+        conn.execute("DELETE FROM tv_messages WHERE id = ?", (message_id,))
+        conn.commit()
+    return redirect(url_for("admin"))
 
 
 @app.route("/admin/redeem-token/<int:participant_id>", methods=["GET", "POST"])
@@ -1577,5 +1962,15 @@ def logout():
 
 init_db()
 
+def serve_portal_port():
+    from werkzeug.serving import make_server
+    try:
+        make_server(FLASK_HOST, PORTAL_PORT, app, threaded=True).serve_forever()
+    except OSError as error:
+        print(f"Could not open the hotspot port {PORTAL_PORT}: {error}", flush=True)
+
+
 if __name__ == "__main__":
+    if PORTAL_PORT and PORTAL_PORT != FLASK_PORT:
+        threading.Thread(target=serve_portal_port, daemon=True).start()
     app.run(host=FLASK_HOST, port=FLASK_PORT, debug=False, threaded=True)

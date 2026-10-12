@@ -86,25 +86,19 @@ sudo systemctl restart cotton-flat-quiz.service
 - `/tv` — full-screen TV display (Dopewars high scores, or the drawing game while a round runs)
 - `/admin` — host administration
 
-## ESP32 portal
+## Wi-Fi hotspot (Pi, no ESP32)
 
-Flash `esp32_portal.ino` to the ESP32. It creates the open Wi-Fi network **Cotton Flat Bar Quiz** and hosts the portal menu at:
+The Pi's built-in Wi-Fi broadcasts the open network **Cotton Flat Bar Quiz** and the Pi is `192.168.4.1` on it. The USB Wi-Fi dongle stays connected to the bar's internet, so Raspberry Pi Connect keeps working. Set it up once, from the repo folder on the Pi:
 
-```text
-http://192.168.4.1
+```bash
+sudo bash setup-hotspot.sh
 ```
 
-The ESP32 menu sends quiz requests to the Raspberry Pi at:
+The script refuses to run if the built-in Wi-Fi is the Pi's only internet connection. Unplug the ESP32 afterwards so two networks don't share the same name.
 
-```text
-http://192.168.4.4:5000
-```
+The hotspot answers every name lookup with `192.168.4.1`, and the quiz also listens on port 80 (`PORTAL_PORT=80` in `cotton-flat-quiz.service`). A phone's "is there internet?" check is redirected to `http://192.168.4.1/`, so the sign-in popup opens the main menu. Once the phone opens any quiz page, its next check gets a success reply, so the popup shows **Done** and the phone stays connected.
 
-The Pi must use `192.168.4.4` on the ESP32 access-point network. Set it as a static address on the Pi: the ESP32 hands phones `192.168.4.10` and up, so a Pi left on DHCP would get one of those instead. If that address changes, update `PI_IP` in `esp32_portal.ino`, reflash the ESP32, and restart the Flask service on the Pi.
-
-When a phone joins, the ESP32 answers the phone's "is there internet?" check with a redirect to `http://192.168.4.1/`, so the sign-in popup opens the menu automatically. Menu buttons go through `/go?to=<path>`, which marks that phone as signed in; its next check gets a success reply, so the popup shows **Done** and the phone stays on the quiz Wi-Fi.
-
-The ESP32 checks `/health` before displaying the menu. An offline indicator means the Pi service is not reachable; it does not necessarily indicate an ESP32 failure.
+`esp32_portal.ino` is the old ESP32 version of this and is no longer needed.
 
 ## Games
 
@@ -124,7 +118,7 @@ Players trade across NYC locations with day-by-day price changes, travel events,
 
 ### Drawing with Friends
 
-`/games/drawing`: someone taps **Start a New Round**, players join with a name, and any joined player taps **Start Drawing**. Everyone gets the same random prompt and 2 minutes to draw on their phone (drawings auto-submit when time runs out). Each drawing is then shown on the TV for 15 seconds in join order, after which the TV goes back to Dopewars scores. The admin page has **End Current Drawing Round** for stuck rounds. Only the last 10 rounds' drawings are kept in `quiz.db`.
+`/games/drawing`: sign in with your name and PIN and tap **Join the Game**. Any player at the table taps **Start Round**: everyone gets the same random prompt, 10 seconds to get ready and 90 seconds to draw (drawings auto-submit). The TV and phones then show the drawings numbered, and everyone at the table votes on their phone for a favourite that isn't their own; voting closes when everyone has voted or after 45 seconds. The drawing with the most votes earns its artist 1 point (ties all score). People who join while a round is running play from the next round, and each new player resets everyone's score to 0. The admin page has **End Current Drawing Round** for stuck rounds. Only the last 10 rounds' drawings are kept in `quiz.db`.
 
 ## TV display
 
@@ -140,6 +134,8 @@ Exec=chromium-browser --kiosk --noerrdialogs --disable-infobars --incognito http
 ```
 
 On newer Raspberry Pi OS the browser command may be `chromium` instead of `chromium-browser`. Press `Alt+F4` to close kiosk mode.
+
+The TV rotates Dopewars high scores, Drawing with Friends scores and MVPs (most visits) every 12 seconds, and switches to the drawing game during a round. **Admin > TV Screens** can rename, hide or clear each board, remove single Dopewars scores, and add message screens. **Play as Host** on the admin page lets the host take the quiz and play the games, and the player table has **Rename** for fixing names.
 
 ## ESP32 secrets
 
