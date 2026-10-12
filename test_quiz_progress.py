@@ -1,6 +1,7 @@
 import os
 import tempfile
 import unittest
+from contextlib import closing
 from shutil import copyfile
 from pathlib import Path
 from unittest.mock import patch
@@ -63,8 +64,8 @@ class QuizProgressTestCase(unittest.TestCase):
                 """SELECT COUNT(*)
                    FROM participant_answers pa
                    JOIN participants p ON p.id = pa.participant_id
-                   WHERE p.pin = ?""",
-                (pin,),
+                   WHERE p.name_key = ?""",
+                (pin.casefold(),),
             ).fetchone()
             return row[0]
         finally:
@@ -77,9 +78,9 @@ class QuizProgressTestCase(unittest.TestCase):
                 """SELECT dt.milestone
                    FROM drink_tokens dt
                    JOIN participants p ON p.id = dt.participant_id
-                   WHERE p.pin = ?
+                   WHERE p.name_key = ?
                    ORDER BY dt.milestone ASC""",
-                (pin,),
+                (pin.casefold(),),
             ).fetchall()
             return [row[0] for row in rows]
         finally:
@@ -98,8 +99,7 @@ class QuizProgressTestCase(unittest.TestCase):
 
     def set_dopewars_pin(self, client=None, pin="dope1"):
         client = client or self.client
-        with client.session_transaction() as session:
-            session["participant_pin"] = pin.upper()
+        client.post("/login", data={"name": pin, "pin": pin})
         return client
 
     def dopewars_top_score(self, pin):
@@ -109,8 +109,8 @@ class QuizProgressTestCase(unittest.TestCase):
                 """SELECT ds.top_score
                    FROM dopewars_scores ds
                    JOIN participants p ON p.id = ds.participant_id
-                   WHERE p.pin = ?""",
-                (pin.upper(),),
+                   WHERE p.name_key = ?""",
+                (pin.casefold(),),
             ).fetchone()
             return row[0] if row else None
         finally:
@@ -119,7 +119,7 @@ class QuizProgressTestCase(unittest.TestCase):
     def test_new_pin_starts_from_first_question(self):
         first_question = self.approved_questions()[0]["text"]
 
-        response = self.client.post("/quiz", data={"pin": "alpha1"}, follow_redirects=True)
+        response = self.client.post("/login", data={"name": "alpha1", "pin": "alpha1", "next": "/quiz"}, follow_redirects=True)
         body = response.get_data(as_text=True)
 
         self.assertEqual(response.status_code, 200)
@@ -132,7 +132,7 @@ class QuizProgressTestCase(unittest.TestCase):
         second_question = questions[1]["text"]
 
         first_client = Quiz.app.test_client()
-        first_client.post("/quiz", data={"pin": "resume1"}, follow_redirects=True)
+        first_client.post("/login", data={"name": "resume1", "pin": "resume1", "next": "/quiz"}, follow_redirects=True)
         response = self.answer_question(first_client, 0)
         body = response.get_data(as_text=True)
 
@@ -141,7 +141,7 @@ class QuizProgressTestCase(unittest.TestCase):
         self.assertEqual(self.answered_count("RESUME1"), 1)
 
         returning_client = Quiz.app.test_client()
-        response = returning_client.post("/quiz", data={"pin": "resume1"}, follow_redirects=True)
+        response = returning_client.post("/login", data={"name": "resume1", "pin": "resume1", "next": "/quiz"}, follow_redirects=True)
         body = response.get_data(as_text=True)
 
         self.assertIn(second_question, body)
@@ -153,15 +153,15 @@ class QuizProgressTestCase(unittest.TestCase):
         second_question = questions[1]["text"]
 
         first_client = Quiz.app.test_client()
-        first_client.post("/quiz", data={"pin": "alpha2"}, follow_redirects=True)
+        first_client.post("/login", data={"name": "alpha2", "pin": "alpha2", "next": "/quiz"}, follow_redirects=True)
         self.answer_question(first_client, 0)
 
         second_client = Quiz.app.test_client()
-        response = second_client.post("/quiz", data={"pin": "beta2"}, follow_redirects=True)
+        response = second_client.post("/login", data={"name": "beta2", "pin": "beta2", "next": "/quiz"}, follow_redirects=True)
         self.assertIn(first_question, response.get_data(as_text=True))
 
         returning_client = Quiz.app.test_client()
-        response = returning_client.post("/quiz", data={"pin": "alpha2"}, follow_redirects=True)
+        response = returning_client.post("/login", data={"name": "alpha2", "pin": "alpha2", "next": "/quiz"}, follow_redirects=True)
         body = response.get_data(as_text=True)
 
         self.assertIn(second_question, body)
@@ -172,7 +172,7 @@ class QuizProgressTestCase(unittest.TestCase):
         only_question = self.approved_questions()[0]["text"]
 
         first_client = Quiz.app.test_client()
-        first_client.post("/quiz", data={"pin": "done1"}, follow_redirects=True)
+        first_client.post("/login", data={"name": "done1", "pin": "done1", "next": "/quiz"}, follow_redirects=True)
         response = self.answer_question(first_client, 0)
         body = response.get_data(as_text=True)
 
@@ -180,7 +180,7 @@ class QuizProgressTestCase(unittest.TestCase):
         self.assertNotIn(only_question, body)
 
         returning_client = Quiz.app.test_client()
-        response = returning_client.post("/quiz", data={"pin": "done1"}, follow_redirects=True)
+        response = returning_client.post("/login", data={"name": "done1", "pin": "done1", "next": "/quiz"}, follow_redirects=True)
         body = response.get_data(as_text=True)
 
         self.assertIn("already answered every available question.", body)
@@ -189,7 +189,7 @@ class QuizProgressTestCase(unittest.TestCase):
     def test_tokens_are_issued_every_20_answers(self):
         self.trim_questions(60)
         client = Quiz.app.test_client()
-        client.post("/quiz", data={"pin": "token20"}, follow_redirects=True)
+        client.post("/login", data={"name": "token20", "pin": "token20", "next": "/quiz"}, follow_redirects=True)
 
         self.answer_questions(client, 0, 20)
         self.assertEqual(self.token_milestones("TOKEN20"), [20])
@@ -203,7 +203,7 @@ class QuizProgressTestCase(unittest.TestCase):
     def test_reanswering_question_does_not_duplicate_tokens(self):
         self.trim_questions(20)
         client = Quiz.app.test_client()
-        client.post("/quiz", data={"pin": "nodupe1"}, follow_redirects=True)
+        client.post("/login", data={"name": "nodupe1", "pin": "nodupe1", "next": "/quiz"}, follow_redirects=True)
 
         self.answer_questions(client, 0, 20)
         self.assertEqual(self.token_milestones("NODUPE1"), [20])
@@ -272,7 +272,8 @@ class QuizProgressTestCase(unittest.TestCase):
         self.assertEqual(self.client.get("/tv").status_code, 200)
         state = self.client.get("/tv/state").get_json()
         self.assertEqual(state["mode"], "scores")
-        self.assertEqual(state["scores"][0]["name"], "TV01")
+        self.assertEqual(state["boards"][0]["rows"][0]["name"], "tv01")
+        self.assertEqual(state["boards"][1]["rows"][0], {"name": "tv01", "score": 1})
 
     TINY_JPEG = "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQ=="
 
@@ -345,11 +346,11 @@ class QuizProgressTestCase(unittest.TestCase):
 
     def test_gold_users_page_lists_participants_without_double_counting_tokens(self):
         leaderboard_client = Quiz.app.test_client()
-        leaderboard_client.post("/quiz", data={"pin": "gold20"}, follow_redirects=True)
+        leaderboard_client.post("/login", data={"name": "gold20", "pin": "gold20", "next": "/quiz"}, follow_redirects=True)
         self.answer_questions(leaderboard_client, 0, 20)
 
         second_client = Quiz.app.test_client()
-        second_client.post("/quiz", data={"pin": "gold40"}, follow_redirects=True)
+        second_client.post("/login", data={"name": "gold40", "pin": "gold40", "next": "/quiz"}, follow_redirects=True)
         self.answer_questions(second_client, 0, 40)
 
         response = self.client.get("/gold-users")
@@ -357,14 +358,14 @@ class QuizProgressTestCase(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertIn("Gold Users", body)
-        self.assertIn("GOLD20", body)
-        self.assertIn("GOLD40", body)
-        self.assertIn("<td>1</td><td>GOLD40</td><td>40</td><td>2</td><td>0</td><td>2</td><td>0/20</td>", body)
-        self.assertIn("<td>2</td><td>GOLD20</td><td>20</td><td>1</td><td>0</td><td>1</td><td>0/20</td>", body)
+        self.assertIn("gold20", body)
+        self.assertIn("gold40", body)
+        self.assertIn("<td>1</td><td>gold40</td><td>40</td><td>2</td><td>0</td><td>2</td><td>0/20</td>", body)
+        self.assertIn("<td>2</td><td>gold20</td><td>20</td><td>1</td><td>0</td><td>1</td><td>0/20</td>", body)
 
     def test_admin_page_shows_token_counts_without_join_multiplication(self):
         client = Quiz.app.test_client()
-        client.post("/quiz", data={"pin": "admin20"}, follow_redirects=True)
+        client.post("/login", data={"name": "admin20", "pin": "admin20", "next": "/quiz"}, follow_redirects=True)
         self.answer_questions(client, 0, 20)
 
         self.make_admin()
@@ -372,7 +373,7 @@ class QuizProgressTestCase(unittest.TestCase):
         body = response.get_data(as_text=True)
 
         self.assertEqual(response.status_code, 200)
-        self.assertIn("<td>ADMIN20</td><td>20</td><td>1</td><td>0</td><td>0/20</td>", body)
+        self.assertIn("<td>admin20</td><td>20</td><td>1</td><td>0</td><td>0/20</td>", body)
 
     def test_dopewars_new_game_initializes_starting_stats(self):
         self.set_dopewars_pin()
@@ -501,12 +502,12 @@ class QuizProgressTestCase(unittest.TestCase):
             self.assertFalse(state["game_over"])
 
     def test_dopewars_requires_pin_before_play(self):
-        response = self.client.get("/games/dopewars")
+        response = self.client.get("/games/dopewars", follow_redirects=True)
         body = response.get_data(as_text=True)
 
         self.assertEqual(response.status_code, 200)
-        self.assertIn("Enter your PIN", body)
-        self.assertIn("Play Dopewars", body)
+        self.assertIn("Who's playing?", body)
+        self.assertIn("name='next' value='/games/dopewars'", body)
 
     def test_dopewars_quit_saves_best_score_and_reset_does_not_overwrite(self):
         self.set_dopewars_pin(pin="score1")
@@ -544,7 +545,7 @@ class QuizProgressTestCase(unittest.TestCase):
         self.assertEqual(self.dopewars_top_score("score1"), 10000)
 
         menu = self.client.get("/").get_data(as_text=True)
-        self.assertIn("SCORE1", menu)
+        self.assertIn("score1", menu)
         self.assertIn("$10000", menu)
 
     def test_captive_probe_redirects_until_phone_opens_a_page(self):
@@ -561,6 +562,37 @@ class QuizProgressTestCase(unittest.TestCase):
         self.assertIn("Success", self.client.get("/hotspot-detect.html", headers={"Host": "captive.apple.com"}).get_data(as_text=True))
         self.assertEqual(self.client.get("/anything", headers={"Host": "example.com"}).status_code, 302)
         Quiz.signed_in_clients.clear()
+    def test_name_login_is_protected_by_pin_and_hides_pin(self):
+        owner = Quiz.app.test_client()
+        response = owner.post("/login", data={"name": "Big Dan", "pin": "4321", "next": "/"}, follow_redirects=True)
+        body = response.get_data(as_text=True)
+        self.assertIn("Playing as <strong>Big Dan</strong>", body)
+        self.assertNotIn("4321", body)
+
+        thief = Quiz.app.test_client()
+        response = thief.post("/login", data={"name": "big dan", "pin": "9999", "next": "/quiz"})
+        self.assertIn("PIN doesn&#x27;t match", response.get_data(as_text=True))
+        self.assertEqual(thief.get("/quiz").status_code, 302)
+
+        again = Quiz.app.test_client()
+        again.post("/login", data={"name": "BIG DAN", "pin": "4321"})
+        with closing(Quiz.db_conn()) as conn:
+            rows = conn.execute("SELECT name, pin, login_count FROM participants").fetchall()
+        self.assertEqual([(row["name"], row["login_count"]) for row in rows], [("Big Dan", 2)])
+        self.assertNotIn("4321", rows[0]["pin"])
+        self.assertEqual(self.client.get("/tv/state").get_json()["boards"][1]["rows"], [{"name": "Big Dan", "score": 2}])
+
+    def test_old_pin_profile_is_claimed_by_first_name_login(self):
+        with closing(Quiz.db_conn()) as conn:
+            old_id = conn.execute("INSERT INTO participants (pin, created_at, last_seen_at) VALUES ('OLD123', 'x', 'x')").lastrowid
+            conn.execute("INSERT INTO drink_tokens (participant_id, milestone, created_at) VALUES (?, 20, 'x')", (old_id,))
+            conn.commit()
+        self.assertIn("Player", self.client.get("/gold-users").get_data(as_text=True))
+        self.client.post("/login", data={"name": "Rosa", "pin": "old123"})
+        with closing(Quiz.db_conn()) as conn:
+            row = conn.execute("SELECT id, name FROM participants WHERE name_key = 'rosa'").fetchone()
+        self.assertEqual((row["id"], row["name"]), (old_id, "Rosa"))
+        self.assertNotIn("OLD123", self.client.get("/gold-users").get_data(as_text=True))
 
 if __name__ == "__main__":
     unittest.main()

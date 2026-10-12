@@ -14,6 +14,7 @@ import threading
 import time
 
 from flask import Flask, Response, redirect, request, session, url_for
+from werkzeug.security import check_password_hash, generate_password_hash
 
 
 app = Flask(__name__)
@@ -320,6 +321,11 @@ def init_db():
     """)
     ensure_column(conn, "questions", "seed_key", "TEXT")
     ensure_column(conn, "questions", "question_number", "INTEGER")
+    ensure_column(conn, "participants", "name", "TEXT")
+    ensure_column(conn, "participants", "name_key", "TEXT")
+    ensure_column(conn, "participants", "pin_hash", "TEXT")
+    ensure_column(conn, "participants", "login_count", "INTEGER NOT NULL DEFAULT 0")
+    conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_participants_name_key ON participants(name_key)")
     conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_questions_seed_key ON questions(seed_key)")
     conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_questions_question_number ON questions(question_number)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_questions_approved_id ON questions(approved, id)")
@@ -461,13 +467,70 @@ def normalize_pin(value):
     return re.sub(r"[^A-Z0-9]", "", (value or "").strip().upper())[:MAX_PIN_LENGTH]
 
 
-def participant_for_pin(conn, pin):
-    row = conn.execute("SELECT * FROM participants WHERE pin = ?", (pin,)).fetchone()
+PLAYER_NAME_MAX_LENGTH = 20
+PIN_HASH_METHOD = "pbkdf2:sha256:60000"
+PLAYER_NAME_SQL = "COALESCE(p.name, 'Player ' || p.id)"
+
+
+def normalize_player_name(value):
+    return re.sub(r"\s+", " ", value or "").strip()[:PLAYER_NAME_MAX_LENGTH]
+
+
+def participant_login(conn, name, pin):
+    """Return (participant_id, error). Unknown names get a new profile, or claim an old PIN-only profile with that PIN."""
+    key = name.casefold()
+    row = conn.execute("SELECT * FROM participants WHERE name_key = ?", (key,)).fetchone()
     if row:
-        conn.execute("UPDATE participants SET last_seen_at = ? WHERE id = ?", (now(), row["id"]))
-        return row["id"]
-    cur = conn.execute("INSERT INTO participants (pin, created_at, last_seen_at) VALUES (?, ?, ?)", (pin, now(), now()))
-    return cur.lastrowid
+        if not row["pin_hash"] or not check_password_hash(row["pin_hash"], pin):
+            return None, "That name is taken and the PIN doesn't match. Try the PIN again or pick another name."
+        participant_id = row["id"]
+    else:
+        pin_hash = generate_password_hash(pin, method=PIN_HASH_METHOD)
+        legacy = conn.execute("SELECT id FROM participants WHERE pin = ? AND name_key IS NULL", (pin,)).fetchone()
+        if legacy:
+            participant_id = legacy["id"]
+        else:
+            participant_id = conn.execute(
+                "INSERT INTO participants (pin, created_at, last_seen_at) VALUES (?, ?, ?)", (f"name:{key}", now(), now())
+            ).lastrowid
+        conn.execute(
+            "UPDATE participants SET name = ?, name_key = ?, pin_hash = ?, pin = ? WHERE id = ?",
+            (name, key, pin_hash, f"name:{participant_id}", participant_id),
+        )
+    conn.execute("UPDATE participants SET last_seen_at = ?, login_count = login_count + 1 WHERE id = ?", (now(), participant_id))
+    return participant_id, ""
+
+
+def logged_in_participant(conn):
+    participant_id = session.get("participant_id")
+    if participant_id and conn.execute("SELECT 1 FROM participants WHERE id = ?", (participant_id,)).fetchone():
+        return participant_id
+    session.pop("participant_id", None)
+    session.pop("participant_name", None)
+    return None
+
+
+def safe_next(value):
+    value = value or "/"
+    return value if value.startswith("/") and not value.startswith("//") else "/"
+
+
+def login_form(next_path, error="", name=""):
+    error_html = f"<div class='error'>{escape(error)}</div>" if error else ""
+    return (
+        "<h1>Who's playing?</h1><p class='muted'>Pick a name and a PIN (4+ letters or numbers). Use the same name and PIN next time to keep your quiz progress, drink tokens and high scores. Only your name is ever shown.</p>"
+        f"{error_html}<form method='post' action='{escape(url_for('login'))}'><input type='hidden' name='next' value='{escape(next_path)}'>"
+        f"<input name='name' maxlength='{PLAYER_NAME_MAX_LENGTH}' required placeholder='Your name' value='{escape(name)}'>"
+        "<input name='pin' type='password' maxlength='20' minlength='4' required pattern='[A-Za-z0-9]+' placeholder='PIN'>"
+        "<button class='btn btn-ok' type='submit'>Continue</button></form><a class='btn btn-sec' href='/'>Back to Menu</a>"
+    )
+
+
+def player_line():
+    name = session.get("participant_name")
+    if name:
+        return f"<p>Playing as <strong>{escape(name)}</strong> · <a href='/logout'>switch player</a></p>"
+    return "<p><a href='/login'>Sign in with your name and PIN</a></p>"
 
 
 def next_question_number(conn):
@@ -571,10 +634,10 @@ def dopewars_finish_run(state, participant_id, reason):
 def dopewars_leaderboard(conn, limit=10):
     return conn.execute(
         """
-        SELECT p.pin, ds.top_score, ds.achieved_at
+        SELECT COALESCE(p.name, 'Player ' || p.id) AS name, ds.top_score, ds.achieved_at
         FROM dopewars_scores ds
         JOIN participants p ON p.id = ds.participant_id
-        ORDER BY ds.top_score DESC, ds.achieved_at ASC, p.pin ASC
+        ORDER BY ds.top_score DESC, ds.achieved_at ASC, name ASC
         LIMIT ?
         """,
         (limit,),
@@ -700,6 +763,36 @@ def health():
     return {"ok": True, "service": "CottonFlatBarQuiz"}, 200
 
 
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    next_path = safe_next(request.values.get("next"))
+    if request.method == "GET":
+        return page("Who's playing?", login_form(next_path))
+    name = normalize_player_name(request.form.get("name"))
+    pin = normalize_pin(request.form.get("pin"))
+    if not name:
+        return page("Who's playing?", login_form(next_path, "Please enter a name."))
+    if len(pin) < MIN_PIN_LENGTH:
+        return page("Who's playing?", login_form(next_path, "Use at least 4 letters or numbers for the PIN.", name))
+    with closing(db_conn()) as conn:
+        participant_id, error = participant_login(conn, name, pin)
+        if error:
+            return page("Who's playing?", login_form(next_path, error, name))
+        display_name = conn.execute("SELECT name FROM participants WHERE id = ?", (participant_id,)).fetchone()["name"]
+        conn.commit()
+    session.pop("dopewars_state", None)
+    session["participant_id"] = participant_id
+    session["participant_name"] = display_name
+    return redirect(next_path)
+
+
+@app.route("/logout")
+def player_logout():
+    for key in ("participant_id", "participant_name", "participant_pin", "dopewars_state"):
+        session.pop(key, None)
+    return redirect(url_for("menu"))
+
+
 @app.route("/")
 def menu():
     with closing(db_conn()) as conn:
@@ -707,6 +800,7 @@ def menu():
     body = [
         "<h1>🍺 Cotton Flat Bar Quiz</h1>",
         "<p class='muted'>Funny sociology, questionable opinions, and community data.</p>",
+        player_line(),
         "<a class='btn btn-ok' href='/quiz'>▶ Take Quiz</a>",
         "<a class='btn btn-sec' href='/submit-question'>✍ Submit Question</a>",
         "<a class='btn btn-sec' href='/answers'>📊 Community Answers</a>",
@@ -717,10 +811,10 @@ def menu():
         "<div class='question left'><h2>🕹 Dopewars</h2><p>Classic text-based street trading across NYC.</p><a class='btn btn-ok' href='/games/dopewars'>Play Dopewars</a><h3>High Scores</h3>",
     ]
     if dopewars_scores:
-        body.append("<table class='table'><tr><th>#</th><th>PIN</th><th>Top Score</th><th>Date</th></tr>")
+        body.append("<table class='table'><tr><th>#</th><th>Player</th><th>Top Score</th><th>Date</th></tr>")
         for index, row in enumerate(dopewars_scores, 1):
             body.append(
-                f"<tr><td>{index}</td><td>{escape(row['pin'])}</td><td>${row['top_score']}</td><td>{escape((row['achieved_at'] or '').replace('T', ' '))}</td></tr>"
+                f"<tr><td>{index}</td><td>{escape(row['name'])}</td><td>${row['top_score']}</td><td>{escape((row['achieved_at'] or '').replace('T', ' '))}</td></tr>"
             )
         body.append("</table>")
     else:
@@ -742,15 +836,18 @@ th{color:#a7b0c0;font-size:2.8vh}td.score{color:#80efad;font-weight:bold;text-al
 <script>
 const app = document.getElementById('app');
 function esc(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
+const BOARD_MS = 12000;
+function fmtScore(b, v){ return (b.unit=='$' ? '$' : '') + Number(v).toLocaleString(); }
 function renderScores(st){
-  let h = "<h1>🕹 Dopewars High Scores</h1>";
-  if(!st.scores.length){h += "<p class='muted'>No scores yet. Join the Wi-Fi <b>Cotton Flat Bar Quiz</b> and play Dopewars!</p>";}
-  else{
-    h += "<table><tr><th>#</th><th>Player</th><th style='text-align:right'>Top Score</th></tr>";
-    st.scores.forEach((r,i)=>{h += `<tr class='${i==0?"first":""}'><td>${i+1}</td><td>${esc(r.name)}</td><td class='score'>$${Number(r.score).toLocaleString()}</td></tr>`;});
-    h += "</table>";
-  }
-  h += "<p class='muted'>Join the Wi-Fi “Cotton Flat Bar Quiz” to play</p>";
+  const boards = st.boards.filter(b=>b.rows.length);
+  if(!boards.length) return "<h1>Cotton Flat Bar Quiz</h1><p class='muted'>No scores yet. Join the Wi-Fi <b>Cotton Flat Bar Quiz</b> and play!</p>";
+  const pick = Math.floor(Date.now()/BOARD_MS) % boards.length;
+  const b = boards[pick];
+  let h = `<h1>${esc(b.title)}</h1><table><tr><th>#</th><th>Player</th><th style='text-align:right'>${esc(b.label)}</th></tr>`;
+  b.rows.forEach((r,i)=>{h += `<tr class='${i==0?"first":""}'><td>${i+1}</td><td>${esc(r.name)}</td><td class='score'>${fmtScore(b, r.score)}</td></tr>`;});
+  h += "</table>";
+  if(b.note) h += `<p class='muted'>${esc(b.note)}</p>`;
+  h += `<p class='muted'>Join the Wi-Fi Cotton Flat Bar Quiz to play · ${pick+1}/${boards.length}</p>`;
   return h;
 }
 let deadline = 0, lastHtml = '';
@@ -788,8 +885,18 @@ poll();
 </script></body></html>"""
 
 
-def tv_scores(conn):
-    return [{"name": row["pin"], "score": row["top_score"]} for row in dopewars_leaderboard(conn)]
+def mvp_leaderboard(conn, limit=10):
+    return conn.execute(
+        "SELECT COALESCE(name, 'Player ' || id) AS name, login_count FROM participants WHERE login_count > 0 ORDER BY login_count DESC, last_seen_at DESC LIMIT ?",
+        (limit,),
+    ).fetchall()
+
+
+def tv_boards(conn):
+    return [
+        {"title": "Dopewars High Scores", "label": "Top Score", "unit": "$", "rows": [{"name": row["name"], "score": row["top_score"]} for row in dopewars_leaderboard(conn)]},
+        {"title": "MVPs: Most Visits", "label": "Visits", "unit": "", "rows": [{"name": row["name"], "score": row["login_count"]} for row in mvp_leaderboard(conn)]},
+    ]
 
 
 @app.route("/tv")
@@ -803,7 +910,7 @@ def tv_state():
         state = drawing_state(conn)
         if state["phase"] != "none":
             return {"mode": "drawing", **state}
-        return {"mode": "scores", "scores": tv_scores(conn)}
+        return {"mode": "scores", "boards": tv_boards(conn)}
 
 
 def clock():
@@ -1115,11 +1222,11 @@ def gold_users():
         "<p class='muted'>Leaderboard for players earning the most drink tokens and answering the most questions.</p>",
     ]
     if participants:
-        body.append("<table class='table'><tr><th>#</th><th>PIN</th><th>Answered</th><th>Tokens ready</th><th>Tokens redeemed</th><th>Total tokens</th><th>Progress</th></tr>")
+        body.append("<table class='table'><tr><th>#</th><th>Player</th><th>Answered</th><th>Tokens ready</th><th>Tokens redeemed</th><th>Total tokens</th><th>Progress</th></tr>")
         for index, participant in enumerate(participants, 1):
             progress = participant["answered"] % TOKEN_MILESTONE
             body.append(
-                f"<tr><td>{index}</td><td>{escape(participant['pin'])}</td><td>{participant['answered']}</td>"
+                f"<tr><td>{index}</td><td>{escape(participant['name'])}</td><td>{participant['answered']}</td>"
                 f"<td>{participant['unredeemed']}</td><td>{participant['redeemed']}</td>"
                 f"<td>{participant['total_tokens']}</td><td>{progress}/{TOKEN_MILESTONE}</td></tr>"
             )
@@ -1132,28 +1239,10 @@ def gold_users():
 
 @app.route("/games/dopewars", methods=["GET", "POST"])
 def dopewars():
-    if request.method == "POST" and request.form.get("action") == "set_pin":
-        pin = normalize_pin(request.form.get("pin"))
-        if len(pin) < MIN_PIN_LENGTH:
-            body = "<h1>Enter your PIN</h1><p class='muted'>Use your quiz PIN so your Dopewars high score can be saved to your profile.</p><div class='error'>Use at least 4 letters or numbers.</div>" + pin_form(url_for("dopewars"), "Play Dopewars", "<input type='hidden' name='action' value='set_pin'>")
-            return page("Enter PIN", body)
-        with closing(db_conn()) as conn:
-            participant_id = participant_for_pin(conn, pin)
-            conn.commit()
-        session["participant_pin"] = pin
-        session["participant_id"] = participant_id
-        return redirect(url_for("dopewars"))
-
-    if not session.get("participant_pin"):
-        body = "<h1>Enter your PIN</h1><p class='muted'>Use your quiz PIN so your Dopewars high score can be saved to your profile.</p>" + pin_form(url_for("dopewars"), "Play Dopewars", "<input type='hidden' name='action' value='set_pin'>")
-        return page("Enter PIN", body)
-
-    participant_id = session.get("participant_id")
+    with closing(db_conn()) as conn:
+        participant_id = logged_in_participant(conn)
     if not participant_id:
-        with closing(db_conn()) as conn:
-            participant_id = participant_for_pin(conn, session["participant_pin"])
-            conn.commit()
-        session["participant_id"] = participant_id
+        return redirect(url_for("login", next=url_for("dopewars")))
 
     state = session.get("dopewars_state")
     if not isinstance(state, dict) or "cash" not in state:
@@ -1249,27 +1338,10 @@ def quiz():
         conn.close()
         return page("Take Quiz", "<h1>Take Quiz</h1><p>No approved questions yet.</p>")
 
-    if request.method == "POST" and not session.get("participant_pin"):
-        pin = normalize_pin(request.form.get("pin"))
-        if len(pin) < MIN_PIN_LENGTH:
-            conn.close()
-            return page("Enter PIN", "<h1>Enter your PIN</h1><div class='error'>Use at least 4 letters or numbers.</div>" + pin_form())
-        participant_id = participant_for_pin(conn, pin)
-        conn.commit()
-        conn.close()
-        session["participant_pin"] = pin
-        session["participant_id"] = participant_id
-        return redirect(url_for("quiz"))
-
-    if not session.get("participant_pin"):
-        conn.close()
-        return page("Enter PIN", "<h1>Enter your PIN</h1><p class='muted'>Use the same PIN each time so the host can track your answers and drink-token progress.</p>" + pin_form())
-
-    participant_id = session.get("participant_id")
+    participant_id = logged_in_participant(conn)
     if not participant_id:
-        participant_id = participant_for_pin(conn, session["participant_pin"])
-        conn.commit()
-        session["participant_id"] = participant_id
+        conn.close()
+        return redirect(url_for("login", next=url_for("quiz")))
 
     answered_ids = {
         row["question_id"]
@@ -1323,7 +1395,7 @@ def quiz():
             return complete_quiz_page("Your answer was saved.")
         return redirect(url_for("quiz", q=next_index))
 
-    body = f"<p class='muted'>Question {index + 1} of {len(questions)} · PIN {escape(session['participant_pin'])}</p><h1>Take Quiz</h1><div class='question left'><h3>{escape(strip_internal_round_labels(question['text']))}</h3><form method='post' action='{escape(url_for('quiz', q=index))}' class='left'>"
+    body = f"<p class='muted'>Question {index + 1} of {len(questions)} · Playing as {escape(session.get('participant_name') or '')} (<a href='/logout'>switch</a>)</p><h1>Take Quiz</h1><div class='question left'><h3>{escape(strip_internal_round_labels(question['text']))}</h3><form method='post' action='{escape(url_for('quiz', q=index))}' class='left'>"
     if question["is_open_text"]:
         body += "<input name='author' maxlength='80' placeholder='Your name (optional)'><textarea name='message' maxlength='2000' required placeholder='Type your answer here'></textarea>"
     else:
@@ -1334,16 +1406,11 @@ def quiz():
     return page("Take Quiz", body)
 
 
-def pin_form(action="", button_label="Start Quiz", hidden_fields=""):
-    action_attr = f" action='{escape(action)}'" if action else ""
-    return f"<form method='post'{action_attr}>{hidden_fields}<input name='pin' maxlength='20' minlength='4' required pattern='[A-Za-z0-9]+' placeholder='Enter your PIN'><button class='btn btn-ok' type='submit'>{escape(button_label)}</button></form>"
-
-
 def participant_stats(conn, sort_mode="admin"):
     order_by = {
-        "admin": "answered DESC, p.pin ASC",
-        "leaderboard": "total_tokens DESC, answered DESC, p.pin ASC",
-    }.get(sort_mode, "answered DESC, p.pin ASC")
+        "admin": "answered DESC, name ASC",
+        "leaderboard": "total_tokens DESC, answered DESC, name ASC",
+    }.get(sort_mode, "answered DESC, name ASC")
     return conn.execute(
         f"""
         WITH answered AS (
@@ -1360,7 +1427,8 @@ def participant_stats(conn, sort_mode="admin"):
             GROUP BY participant_id
         )
         SELECT p.id,
-               p.pin,
+               COALESCE(p.name, 'Player ' || p.id) AS name,
+               p.login_count,
                COALESCE(a.answered, 0) AS answered,
                COALESCE(t.unredeemed, 0) AS unredeemed,
                COALESCE(t.redeemed, 0) AS redeemed,
@@ -1438,10 +1506,10 @@ def admin():
         participants = participant_stats(conn)
     body = "<h1>Host Admin</h1><a class='btn btn-ok' href='/admin/add-question'>Add Question</a><h2>Participant Drink Tokens</h2>"
     if participants:
-        body += "<table class='table'><tr><th>PIN</th><th>Answered</th><th>Tokens ready</th><th>Given</th><th>Progress</th><th>Action</th></tr>"
+        body += "<table class='table'><tr><th>Player</th><th>Answered</th><th>Tokens ready</th><th>Given</th><th>Progress</th><th>Action</th></tr>"
         for participant in participants:
             progress = participant["answered"] % TOKEN_MILESTONE
-            body += f"<tr><td>{escape(participant['pin'])}</td><td>{participant['answered']}</td><td>{participant['unredeemed']}</td><td>{participant['redeemed']}</td><td>{progress}/{TOKEN_MILESTONE}</td><td><a class='btn btn-ok small' href='/admin/redeem-token/{participant['id']}'>Redeem</a></td></tr>"
+            body += f"<tr><td>{escape(participant['name'])}</td><td>{participant['answered']}</td><td>{participant['unredeemed']}</td><td>{participant['redeemed']}</td><td>{progress}/{TOKEN_MILESTONE}</td><td><a class='btn btn-ok small' href='/admin/redeem-token/{participant['id']}'>Redeem</a></td></tr>"
         body += "</table>"
     else:
         body += "<p class='muted'>No participants yet.</p>"
