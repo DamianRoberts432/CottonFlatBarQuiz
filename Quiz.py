@@ -61,13 +61,13 @@ DOPEWARS_LOCATION_MULTIPLIER = {
 }
 DOPEWARS_INTEREST_RATE = 0.1
 
-DRAWING_SECONDS = 120
-DRAWING_REVEAL_SECONDS = 15
+DRAWING_PREP_SECONDS = 10
+DRAWING_SECONDS = 90
+DRAWING_VOTE_SECONDS = 45
+DRAWING_RESULTS_SECONDS = 12
 DRAWING_SUBMIT_GRACE_SECONDS = 5
-DRAWING_LATE_JOIN_MIN_SECONDS = 20
 DRAWING_LOBBY_TIMEOUT_SECONDS = 20 * 60
 DRAWING_MAX_IMAGE_CHARS = 400_000
-DRAWING_MAX_NAME_LENGTH = 20
 DRAWING_KEEP_ROUNDS = 10
 DRAWING_IMAGE_RE = re.compile(r"data:image/(jpeg|png);base64,([A-Za-z0-9+/=]+)")
 DRAWING_PROMPTS = [
@@ -311,6 +311,14 @@ def init_db():
             FOREIGN KEY(round_id) REFERENCES drawing_rounds(id) ON DELETE CASCADE,
             UNIQUE(round_id, player_token)
         );
+        CREATE TABLE IF NOT EXISTS drawing_players (
+            player_token TEXT PRIMARY KEY, participant_id INTEGER, nickname TEXT NOT NULL,
+            points INTEGER NOT NULL DEFAULT 0, joined_at REAL NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS drawing_votes (
+            round_id INTEGER NOT NULL, voter_token TEXT NOT NULL, entry_id INTEGER NOT NULL, voted_at REAL NOT NULL,
+            PRIMARY KEY(round_id, voter_token)
+        );
         CREATE TABLE IF NOT EXISTS dopewars_scores (
             participant_id INTEGER PRIMARY KEY,
             top_score INTEGER NOT NULL,
@@ -321,6 +329,10 @@ def init_db():
     """)
     ensure_column(conn, "questions", "seed_key", "TEXT")
     ensure_column(conn, "questions", "question_number", "INTEGER")
+    ensure_column(conn, "drawing_rounds", "prep_ends_at", "REAL")
+    ensure_column(conn, "drawing_rounds", "vote_started_at", "REAL")
+    ensure_column(conn, "drawing_rounds", "results_started_at", "REAL")
+    ensure_column(conn, "drawing_rounds", "winners", "TEXT")
     ensure_column(conn, "participants", "name", "TEXT")
     ensure_column(conn, "participants", "name_key", "TEXT")
     ensure_column(conn, "participants", "pin_hash", "TEXT")
@@ -832,6 +844,7 @@ table{border-collapse:collapse;font-size:4vh;min-width:60vw}td,th{padding:1.2vh 
 th{color:#a7b0c0;font-size:2.8vh}td.score{color:#80efad;font-weight:bold;text-align:right}tr.first td{color:#ffd54a}
 .timer{font-size:22vh;font-weight:bold;color:#ffd54a;line-height:1}.art{max-height:62vh;max-width:90vw;border-radius:12px;background:#fff;margin:1vh 0}
 .chips{display:flex;flex-wrap:wrap;gap:1.5vh;justify-content:center;margin:3vh 0}.chip{background:#6a3fb5;padding:1.2vh 2.5vw;border-radius:999px;font-size:3.5vh}
+.grid{display:flex;flex-wrap:wrap;gap:3vh;justify-content:center;margin:2vh 0}.cell{position:relative}.cell img{height:30vh;max-width:28vw;background:#fff;border-radius:10px}.cell img.win{height:55vh;max-width:80vw}.num{position:absolute;top:-1.5vh;left:-1.5vh;background:#ffd54a;color:#111;font-weight:bold;font-size:5vh;border-radius:999px;padding:0 2vh}
 </style></head><body><div id='app'><h1>🍺 Cotton Flat Bar Quiz</h1></div>
 <script>
 const app = document.getElementById('app');
@@ -853,24 +866,25 @@ function renderScores(st){
 let deadline = 0, lastHtml = '';
 function fmt(sec){sec=Math.max(0,Math.ceil(sec));return Math.floor(sec/60)+':'+String(sec%60).padStart(2,'0');}
 function renderDrawing(st){
-  let h = "<h2>🎨 Drawing with Friends</h2>";
-  if(st.phase=='lobby'){
-    h += "<h1>New round starting!</h1><p class='muted'>On your phone: Wi-Fi “Cotton Flat Bar Quiz” → Drawing with Friends</p>";
-    h += "<div class='chips'>" + st.players.map(n=>`<span class='chip'>${esc(n)}</span>`).join('') + "</div>";
-    h += `<p class='muted'>${st.players.length} player${st.players.length==1?'':'s'} in · waiting for someone to press Start</p>`;
+  let h = "<h2>Drawing with Friends</h2>";
+  if(st.phase=='prep'){
+    h += `<h1>Get ready to draw: &ldquo;${esc(st.prompt)}&rdquo;</h1><div id='timer' class='timer'></div><p class='muted'>${st.players.map(esc).join(' &middot; ')}</p>`;
   }else if(st.phase=='drawing'){
-    h += `<h1>Draw: “${esc(st.prompt)}”</h1><div id='timer' class='timer'></div>`;
-    h += `<p class='muted'>${st.submitted} of ${st.players.length} drawings in</p>`;
-  }else if(st.phase=='reveal'){
-    const r = st.reveal;
-    h += `<p class='muted'>“${esc(st.prompt)}”</p><img class='art' src='/games/drawing/image/${r.entry_id}'>`;
-    h += `<h1>by ${esc(r.nickname)}</h1><p class='muted'>${r.index} of ${r.total}</p>`;
+    h += `<h1>Draw: &ldquo;${esc(st.prompt)}&rdquo;</h1><div id='timer' class='timer'></div><p class='muted'>${st.submitted} of ${st.players.length} drawings in</p>`;
+  }else if(st.phase=='voting'){
+    h += `<h1>Vote on your phone! &ldquo;${esc(st.prompt)}&rdquo;</h1><div class='grid'>`;
+    h += st.drawings.map(d=>`<div class='cell'><img src='/games/drawing/image/${d.entry_id}'><span class='num'>${d.number}</span></div>`).join('');
+    h += `</div><p class='muted'>${st.votes_in} of ${st.voters} votes in &middot; <span id='timer'></span></p>`;
+  }else if(st.phase=='results'){
+    if(st.winners.length){ h += "<div class='grid'>" + st.winners.map(w=>`<div class='cell'><img class='win' src='/games/drawing/image/${w.entry_id}'><span class='num'>${w.number}</span><h1>${esc(w.name)} wins! +1 point</h1></div>`).join('') + "</div>"; }
+    else { h += "<h1>No votes this round</h1>"; }
+    h += "<p class='muted'>" + st.standings.map(s=>`${esc(s.name)}: ${s.points}`).join(' &middot; ') + "</p>";
   }
   return h;
 }
 function render(st){
   const html = st.mode=='drawing' ? renderDrawing(st) : renderScores(st);
-  if(st.mode=='drawing' && st.phase=='drawing') deadline = Date.now() + st.seconds_left*1000;
+  if(st.mode=='drawing') deadline = Date.now() + st.seconds_left*1000;
   if(html !== lastHtml){ app.innerHTML = html; lastHtml = html; }
   tick();
 }
@@ -896,6 +910,7 @@ def tv_boards(conn):
     return [
         {"title": "Dopewars High Scores", "label": "Top Score", "unit": "$", "rows": [{"name": row["name"], "score": row["top_score"]} for row in dopewars_leaderboard(conn)]},
         {"title": "MVPs: Most Visits", "label": "Visits", "unit": "", "rows": [{"name": row["name"], "score": row["login_count"]} for row in mvp_leaderboard(conn)]},
+        {"title": "Drawing with Friends Scores", "label": "Points", "unit": "", "rows": [{"name": row["name"], "score": row["points"]} for row in drawing_standings(conn)]},
     ]
 
 
@@ -929,72 +944,121 @@ def drawing_end_round(conn, round_id, status):
     conn.commit()
 
 
+def drawing_reload(conn, round_id):
+    return conn.execute("SELECT * FROM drawing_rounds WHERE id = ?", (round_id,)).fetchone()
+
+
+def drawing_award(conn, rnd, current):
+    claimed = conn.execute(
+        "UPDATE drawing_rounds SET results_started_at = ? WHERE id = ? AND results_started_at IS NULL", (current, rnd["id"])
+    ).rowcount
+    if claimed:
+        tally = conn.execute("SELECT entry_id, COUNT(*) AS votes FROM drawing_votes WHERE round_id = ? GROUP BY entry_id", (rnd["id"],)).fetchall()
+        top = max((row["votes"] for row in tally), default=0)
+        winners = [row["entry_id"] for row in tally if top and row["votes"] == top]
+        for entry_id in winners:
+            conn.execute(
+                "UPDATE drawing_players SET points = points + 1 WHERE player_token = (SELECT player_token FROM drawing_entries WHERE id = ?)",
+                (entry_id,),
+            )
+        conn.execute("UPDATE drawing_rounds SET winners = ? WHERE id = ?", (json.dumps(winners), rnd["id"]))
+    conn.commit()
+    return drawing_reload(conn, rnd["id"])
+
+
 def drawing_current_round(conn):
     """Return (round, entries, phase) for the running round, advancing it by the clock; None when idle."""
     rnd = conn.execute("SELECT * FROM drawing_rounds WHERE status IN ('lobby', 'drawing') ORDER BY id DESC LIMIT 1").fetchone()
     if not rnd:
         return None
+    if rnd["status"] == "lobby" or rnd["prep_ends_at"] is None:
+        drawing_end_round(conn, rnd["id"], "expired")
+        return None
     current = clock()
     entries = drawing_entries(conn, rnd["id"])
-    if rnd["status"] == "lobby":
-        if current - rnd["created_at"] > DRAWING_LOBBY_TIMEOUT_SECONDS:
-            drawing_end_round(conn, rnd["id"], "expired")
-            return None
-        return rnd, entries, "lobby"
+    if current < rnd["prep_ends_at"]:
+        return rnd, entries, "prep"
     submitted = [entry for entry in entries if entry["submitted_at"] is not None]
-    reveal_start = rnd["reveal_started_at"]
-    if reveal_start is None:
+    if rnd["vote_started_at"] is None:
         everyone_done = bool(entries) and len(submitted) == len(entries)
         if not everyone_done and current < rnd["draw_ends_at"] + DRAWING_SUBMIT_GRACE_SECONDS:
             return rnd, entries, "drawing"
-        reveal_start = current
-        conn.execute("UPDATE drawing_rounds SET reveal_started_at = ? WHERE id = ?", (reveal_start, rnd["id"]))
+        if not submitted:
+            drawing_end_round(conn, rnd["id"], "done")
+            return None
+        conn.execute("UPDATE drawing_rounds SET vote_started_at = ? WHERE id = ? AND vote_started_at IS NULL", (current, rnd["id"]))
         conn.commit()
-        rnd = conn.execute("SELECT * FROM drawing_rounds WHERE id = ?", (rnd["id"],)).fetchone()
-    if current >= reveal_start + DRAWING_REVEAL_SECONDS * len(submitted):
+        rnd = drawing_reload(conn, rnd["id"])
+    if rnd["results_started_at"] is None:
+        votes = conn.execute("SELECT COUNT(*) FROM drawing_votes WHERE round_id = ?", (rnd["id"],)).fetchone()[0]
+        voters = conn.execute("SELECT COUNT(*) FROM drawing_players").fetchone()[0]
+        if votes < voters and current < rnd["vote_started_at"] + DRAWING_VOTE_SECONDS:
+            return rnd, entries, "voting"
+        rnd = drawing_award(conn, rnd, current)
+    if current >= rnd["results_started_at"] + DRAWING_RESULTS_SECONDS:
         drawing_end_round(conn, rnd["id"], "done")
         return None
-    return rnd, entries, "reveal"
+    return rnd, entries, "results"
 
 
-def drawing_state(conn, player_token=None):
+def drawing_standings(conn):
+    rows = conn.execute("SELECT nickname, points FROM drawing_players ORDER BY points DESC, joined_at ASC")
+    return [{"name": row["nickname"], "points": row["points"]} for row in rows]
+
+
+def drawing_expire_table(conn):
+    last = conn.execute(
+        "SELECT MAX(t) FROM (SELECT MAX(joined_at) AS t FROM drawing_players UNION ALL SELECT MAX(COALESCE(ended_at, created_at)) FROM drawing_rounds)"
+    ).fetchone()[0]
+    if last is not None and clock() - last > DRAWING_LOBBY_TIMEOUT_SECONDS:
+        conn.execute("DELETE FROM drawing_players")
+        conn.commit()
+
+
+def drawing_state(conn, player_token=""):
     current_round = drawing_current_round(conn)
     if not current_round:
-        return {"phase": "none"}
+        drawing_expire_table(conn)
+    standings = drawing_standings(conn)
+    joined = bool(player_token) and conn.execute("SELECT 1 FROM drawing_players WHERE player_token = ?", (player_token,)).fetchone() is not None
+    state = {"phase": "none", "standings": standings, "joined": joined, "signed_in": bool(player_token), "in_round": False}
+    if not current_round:
+        return state
     rnd, entries, phase = current_round
-    current = clock()
-    submitted = [entry for entry in entries if entry["submitted_at"] is not None]
     me = next((entry for entry in entries if player_token and entry["player_token"] == player_token), None)
-    state = {
+    submitted = [entry for entry in entries if entry["submitted_at"] is not None]
+    ends_at = {
+        "prep": rnd["prep_ends_at"],
+        "drawing": rnd["draw_ends_at"],
+        "voting": (rnd["vote_started_at"] or 0) + DRAWING_VOTE_SECONDS,
+        "results": (rnd["results_started_at"] or 0) + DRAWING_RESULTS_SECONDS,
+    }[phase]
+    state.update({
         "phase": phase,
         "round_id": rnd["id"],
-        "prompt": rnd["prompt"] if phase != "lobby" else "",
+        "prompt": rnd["prompt"],
         "players": [entry["nickname"] for entry in entries],
         "submitted": len(submitted),
-        "joined": me is not None,
+        "in_round": me is not None,
         "my_submitted": bool(me and me["submitted_at"] is not None),
-        "my_name": me["nickname"] if me else "",
-    }
-    if phase == "drawing":
-        state["seconds_left"] = max(0, int(math.ceil(rnd["draw_ends_at"] - current)))
-    elif phase == "reveal":
-        elapsed = current - rnd["reveal_started_at"]
-        index = min(int(elapsed // DRAWING_REVEAL_SECONDS), len(submitted) - 1)
-        entry = submitted[index]
-        state["reveal"] = {
-            "index": index + 1,
-            "total": len(submitted),
-            "nickname": entry["nickname"],
-            "entry_id": entry["id"],
-            "seconds_left": max(1, int(math.ceil(DRAWING_REVEAL_SECONDS * (index + 1) - elapsed))),
-        }
+        "seconds_left": max(0, int(math.ceil(ends_at - clock()))),
+    })
+    if phase in ("voting", "results"):
+        votes = {row["voter_token"]: row["entry_id"] for row in conn.execute("SELECT voter_token, entry_id FROM drawing_votes WHERE round_id = ?", (rnd["id"],))}
+        tally = Counter(votes.values())
+        numbers = {entry["id"]: number for number, entry in enumerate(submitted, 1)}
+        winners = set(json.loads(rnd["winners"] or "[]"))
+        state["drawings"] = [{"number": numbers[e["id"]], "entry_id": e["id"], "mine": bool(player_token) and e["player_token"] == player_token} for e in submitted]
+        state["votes_in"] = len(votes)
+        state["voters"] = len(standings)
+        state["my_vote"] = numbers.get(votes.get(player_token))
+        state["winners"] = [{"number": numbers[e["id"]], "entry_id": e["id"], "name": e["nickname"], "votes": tally[e["id"]]} for e in submitted if e["id"] in winners]
     return state
 
 
 def drawing_token():
-    if not session.get("drawing_token"):
-        session["drawing_token"] = secrets.token_hex(8)
-    return session["drawing_token"]
+    participant_id = session.get("participant_id")
+    return f"p{participant_id}" if participant_id else ""
 
 
 def drawing_new_prompt(conn):
@@ -1006,16 +1070,21 @@ def drawing_new_prompt(conn):
 def drawing_prune(conn):
     old_ids = [row["id"] for row in conn.execute("SELECT id FROM drawing_rounds ORDER BY id DESC LIMIT -1 OFFSET ?", (DRAWING_KEEP_ROUNDS,))]
     for round_id in old_ids:
+        conn.execute("DELETE FROM drawing_votes WHERE round_id = ?", (round_id,))
         conn.execute("DELETE FROM drawing_entries WHERE round_id = ?", (round_id,))
         conn.execute("DELETE FROM drawing_rounds WHERE id = ?", (round_id,))
 
 
-def drawing_join_form(error=""):
-    return (
-        f"{error}<form method='post' action='/games/drawing/join' class='form'>"
-        f"<input name='nickname' maxlength='{DRAWING_MAX_NAME_LENGTH}' required placeholder='Your name for the TV'>"
-        "<button class='btn btn-ok' type='submit'>Join</button></form>"
-    )
+def drawing_standings_html(state):
+    rows = state.get("standings") or []
+    if not rows:
+        return ""
+    cells = "".join(f"<tr><td>{escape(row['name'])}</td><td>{row['points']}</td></tr>" for row in rows)
+    return f"<h3>Scores</h3><table class='table'><tr><th>Player</th><th>Points</th></tr>{cells}</table>"
+
+
+def drawing_button(action, label, style="btn-ok", fields=""):
+    return f"<form method='post' action='{action}'>{fields}<button class='btn {style}' type='submit'>{escape(label)}</button></form>"
 
 
 DRAWING_PAD = """
@@ -1054,47 +1123,69 @@ tick(); setInterval(tick, 500);
 
 
 def drawing_page_key(state):
-    reveal = state.get("reveal") or {}
-    return f"{state['phase']}|{state.get('round_id', '')}|{state.get('joined', '')}|{state.get('my_submitted', '')}|{reveal.get('index', '')}"
+    return f"{state['phase']}|{state.get('round_id', '')}|{state['joined']}|{state['in_round']}|{state.get('my_submitted', '')}|{state.get('my_vote', '')}|{len(state['standings'])}"
 
 
 def drawing_render_body(state, error=""):
     phase = state["phase"]
-    players = ", ".join(escape(name) for name in state.get("players", [])) or "nobody yet"
-    body = ["<h1>🎨 Drawing with Friends</h1>"]
-    if phase == "none":
-        body.append(f"<p class='muted'>Everyone gets the same funny prompt and {DRAWING_SECONDS // 60} minutes to draw it. Then each drawing is shown on the TV for {DRAWING_REVEAL_SECONDS} seconds.</p>")
-        body.append("<form method='post' action='/games/drawing/new'><button class='btn btn-ok' type='submit'>Start a New Round</button></form>")
-    elif phase == "lobby":
-        if state["joined"]:
-            body.append(f"<div class='notice'>You're in as <strong>{escape(state['my_name'])}</strong>. The prompt appears when drawing starts.</div>")
-            body.append(f"<p>Players: {players}</p>")
-            body.append("<form method='post' action='/games/drawing/start'><button class='btn btn-ok' type='submit'>Everyone's In - Start Drawing!</button></form>")
+    prompt = escape(state.get("prompt", ""))
+    body = ["<h1>&#127912; Drawing with Friends</h1>", error]
+    rules = (
+        f"<p class='muted'>Everyone gets the same prompt: {DRAWING_PREP_SECONDS} seconds to get ready, {DRAWING_SECONDS} seconds to draw, "
+        "then everyone votes for their favourite numbered drawing. The winner gets 1 point. Scores reset when a new player joins.</p>"
+    )
+    if not state["signed_in"]:
+        body.append(rules + "<a class='btn btn-ok' href='/login?next=/games/drawing'>Sign in to play</a>")
+    elif not state["joined"]:
+        body.append(rules + drawing_button("/games/drawing/join", "Join the Game" if phase == "none" else "Join - you'll play next round"))
+    if phase == "none" and state["joined"]:
+        body.append(f"<p>At the table: {', '.join(escape(row['name']) for row in state['standings'])}</p>")
+        body.append(drawing_button("/games/drawing/start", "Everyone's In - Start Round!"))
+    elif phase == "prep":
+        if state["in_round"]:
+            body.append(f"<h2>Get ready to draw: &ldquo;{prompt}&rdquo;</h2><p class='muted'>Drawing starts in {state['seconds_left']} seconds...</p>")
         else:
-            body.append(f"<p>A round is about to start. Players so far: {players}</p>")
-            body.append(drawing_join_form(error))
+            body.append("<p>A round is starting. Watch the TV!</p>")
     elif phase == "drawing":
-        if state["joined"] and not state["my_submitted"]:
-            body.append(f"<h2>Draw: “{escape(state['prompt'])}”</h2>")
+        if state["in_round"] and not state["my_submitted"]:
+            body.append(f"<h2>Draw: &ldquo;{prompt}&rdquo;</h2>")
             body.append(DRAWING_PAD.replace("SECONDS_LEFT", str(state["seconds_left"])))
-        elif state["joined"]:
+        elif state["in_round"]:
             body.append(f"<div class='notice'>Drawing sent! Waiting for the others ({state['submitted']} of {len(state['players'])} in).</div>")
-        elif state["seconds_left"] > DRAWING_LATE_JOIN_MIN_SECONDS:
-            body.append(f"<p>A round is underway ({state['seconds_left']} seconds left). Jump in and draw with the time that's left:</p>")
-            body.append(drawing_join_form(error))
         else:
-            body.append("<p>This round is almost over. Watch the TV and join the next one!</p>")
-    elif phase == "reveal":
-        reveal = state["reveal"]
-        body.append(f"<h2>Look at the TV! “{escape(state['prompt'])}”</h2>")
-        body.append(f"<img src='/games/drawing/image/{reveal['entry_id']}' style='width:100%;border-radius:8px;background:#fff'>")
-        body.append(f"<p>by <strong>{escape(reveal['nickname'])}</strong> · {reveal['index']} of {reveal['total']}</p>")
+            body.append(f"<p>A round is underway: &ldquo;{prompt}&rdquo;. Watch the TV!</p>")
+    elif phase == "voting":
+        body.append(f"<h2>Vote for your favourite: &ldquo;{prompt}&rdquo;</h2>")
+        if state["my_vote"]:
+            body.append(f"<div class='notice'>You voted for #{state['my_vote']}. Tap another number to change it.</div>")
+        body.append(f"<p class='muted'>{state['votes_in']} of {state['voters']} votes in &middot; about {state['seconds_left']} seconds left</p>")
+        only_one = len(state["drawings"]) == 1
+        for drawing in state["drawings"]:
+            body.append(f"<div class='question left'><img src='/games/drawing/image/{drawing['entry_id']}' style='width:100%;border-radius:8px;background:#fff'>")
+            if state["joined"] and (only_one or not drawing["mine"]):
+                field = f"<input type='hidden' name='number' value='{drawing['number']}'>"
+                body.append(drawing_button("/games/drawing/vote", f"Vote #{drawing['number']}", fields=field))
+            else:
+                body.append(f"<strong>#{drawing['number']}{' (yours)' if drawing['mine'] else ''}</strong>")
+            body.append("</div>")
+    elif phase == "results":
+        for winner in state["winners"]:
+            body.append(f"<h2>#{winner['number']} by {escape(winner['name'])} wins! +1 point</h2>")
+            body.append(f"<img src='/games/drawing/image/{winner['entry_id']}' style='width:100%;border-radius:8px;background:#fff'>")
+        if not state["winners"]:
+            body.append("<h2>No votes this round, so no points.</h2>")
+    if state["joined"] and not state["in_round"] and phase != "none":
+        body.append("<div class='notice'>You're in for the next round.</div>")
+    body.append(drawing_standings_html(state))
+    drawing_now = phase == "drawing" and state["in_round"] and not state.get("my_submitted")
+    if state["joined"] and not drawing_now:
+        body.append(drawing_button("/games/drawing/leave", "Leave the Game", "btn-sec small"))
     body.append("<a class='btn btn-sec' href='/'>Back to Menu</a>")
-    if phase != "drawing" or not state.get("joined") or state.get("my_submitted"):
+    if not drawing_now:
         body.append(
             "<script>const KEY = " + json.dumps(drawing_page_key(state)) + ";"
             "setInterval(async () => { try { const r = await fetch('/games/drawing/state', {cache: 'no-store'}); const s = await r.json();"
-            " if (s.key !== KEY) location.reload(); } catch (e) {} }, 3000);</script>"
+            " if (s.key !== KEY) location.reload(); } catch (e) {} }, 2000);</script>"
         )
     return "".join(body)
 
@@ -1114,34 +1205,28 @@ def drawing_game_state():
     return state
 
 
-@app.route("/games/drawing/new", methods=["POST"])
-def drawing_new():
+@app.route("/games/drawing/join", methods=["POST"])
+def drawing_join():
     with closing(db_conn()) as conn:
-        if not drawing_current_round(conn):
-            drawing_prune(conn)
-            conn.execute("INSERT INTO drawing_rounds (prompt, status, created_at) VALUES (?, 'lobby', ?)", (drawing_new_prompt(conn), clock()))
-            conn.commit()
+        participant_id = logged_in_participant(conn)
+        if not participant_id:
+            return redirect(url_for("login", next=url_for("drawing_game")))
+        name = conn.execute("SELECT COALESCE(name, 'Player ' || id) FROM participants WHERE id = ?", (participant_id,)).fetchone()[0]
+        added = conn.execute(
+            "INSERT OR IGNORE INTO drawing_players (player_token, participant_id, nickname, joined_at) VALUES (?, ?, ?, ?)",
+            (drawing_token(), participant_id, name, clock()),
+        ).rowcount
+        if added:
+            conn.execute("UPDATE drawing_players SET points = 0")
+        conn.commit()
     return redirect(url_for("drawing_game"))
 
 
-@app.route("/games/drawing/join", methods=["POST"])
-def drawing_join():
-    token = drawing_token()
-    nickname = re.sub(r"\s+", " ", request.form.get("nickname", "")).strip()[:DRAWING_MAX_NAME_LENGTH]
+@app.route("/games/drawing/leave", methods=["POST"])
+def drawing_leave():
     with closing(db_conn()) as conn:
-        current_round = drawing_current_round(conn)
-        if not nickname:
-            state = drawing_state(conn, token)
-            return page("Drawing with Friends", drawing_render_body(state, "<div class='error'>Please enter a name.</div>"))
-        if current_round:
-            rnd, _entries, phase = current_round
-            can_join = phase == "lobby" or (phase == "drawing" and rnd["draw_ends_at"] - clock() > DRAWING_LATE_JOIN_MIN_SECONDS)
-            if can_join:
-                conn.execute(
-                    "INSERT OR IGNORE INTO drawing_entries (round_id, player_token, nickname, joined_at) VALUES (?, ?, ?, ?)",
-                    (rnd["id"], token, nickname, clock()),
-                )
-                conn.commit()
+        conn.execute("DELETE FROM drawing_players WHERE player_token = ?", (drawing_token(),))
+        conn.commit()
     return redirect(url_for("drawing_game"))
 
 
@@ -1149,11 +1234,17 @@ def drawing_join():
 def drawing_start():
     token = drawing_token()
     with closing(db_conn()) as conn:
-        current_round = drawing_current_round(conn)
-        if current_round and current_round[2] == "lobby" and any(entry["player_token"] == token for entry in current_round[1]):
+        seated = token and conn.execute("SELECT 1 FROM drawing_players WHERE player_token = ?", (token,)).fetchone()
+        if seated and not drawing_current_round(conn):
+            drawing_prune(conn)
+            start = clock()
+            round_id = conn.execute(
+                "INSERT INTO drawing_rounds (prompt, status, created_at, prep_ends_at, draw_ends_at) VALUES (?, 'drawing', ?, ?, ?)",
+                (drawing_new_prompt(conn), start, start + DRAWING_PREP_SECONDS, start + DRAWING_PREP_SECONDS + DRAWING_SECONDS),
+            ).lastrowid
             conn.execute(
-                "UPDATE drawing_rounds SET status = 'drawing', draw_ends_at = ? WHERE id = ? AND status = 'lobby'",
-                (clock() + DRAWING_SECONDS, current_round[0]["id"]),
+                "INSERT INTO drawing_entries (round_id, player_token, nickname, joined_at) SELECT ?, player_token, nickname, joined_at FROM drawing_players",
+                (round_id,),
             )
             conn.commit()
     return redirect(url_for("drawing_game"))
@@ -1181,6 +1272,22 @@ def drawing_submit():
         if cur.rowcount == 0:
             return {"ok": False, "error": "You are not in this round or already submitted."}, 409
     return {"ok": True}
+
+
+@app.route("/games/drawing/vote", methods=["POST"])
+def drawing_vote():
+    token = drawing_token()
+    number = parse_positive_int(request.form.get("number"))
+    with closing(db_conn()) as conn:
+        state = drawing_state(conn, token)
+        drawing = next((d for d in state.get("drawings", []) if d["number"] == number), None)
+        if state["phase"] == "voting" and state["joined"] and drawing and (not drawing["mine"] or len(state["drawings"]) == 1):
+            conn.execute(
+                "INSERT OR REPLACE INTO drawing_votes (round_id, voter_token, entry_id, voted_at) VALUES (?, ?, ?, ?)",
+                (state["round_id"], token, drawing["entry_id"], clock()),
+            )
+            conn.commit()
+    return redirect(url_for("drawing_game"))
 
 
 @app.route("/games/drawing/image/<int:entry_id>")

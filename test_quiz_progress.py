@@ -279,57 +279,75 @@ class QuizProgressTestCase(unittest.TestCase):
 
     def drawing_player(self, name):
         client = Quiz.app.test_client()
-        client.post("/games/drawing/join", data={"nickname": name})
+        client.post("/login", data={"name": name, "pin": "1234"})
+        client.post("/games/drawing/join")
         return client
 
-    def test_drawing_round_flow_and_tv(self):
+    def test_drawing_round_prep_draw_vote_and_points(self):
         clock = [1000.0]
         with patch.object(Quiz, "clock", lambda: clock[0]):
             self.assertEqual(self.client.get("/games/drawing").status_code, 200)
-            self.client.post("/games/drawing/new")
             alice = self.drawing_player("Alice")
             bob = self.drawing_player("Bob")
-            state = self.client.get("/tv/state").get_json()
-            self.assertEqual((state["mode"], state["phase"], state["players"]), ("drawing", "lobby", ["Alice", "Bob"]))
-            self.assertEqual(state["prompt"], "")
-
             alice.post("/games/drawing/start")
             state = alice.get("/games/drawing/state").get_json()
-            self.assertEqual((state["phase"], state["seconds_left"], state["joined"]), ("drawing", 120, True))
-            self.assertIn("pad", alice.get("/games/drawing").get_data(as_text=True))
+            self.assertEqual((state["phase"], state["seconds_left"], state["in_round"]), ("prep", 10, True))
+            self.assertEqual(self.client.get("/tv/state").get_json()["mode"], "drawing")
+            self.assertEqual(alice.post("/games/drawing/submit", data={"image": self.TINY_JPEG}).status_code, 409)
 
+            clock[0] += 10
+            state = alice.get("/games/drawing/state").get_json()
+            self.assertEqual((state["phase"], state["seconds_left"]), ("drawing", 90))
+            self.assertIn("pad", alice.get("/games/drawing").get_data(as_text=True))
+            carol = self.drawing_player("Carol")
+            self.assertFalse(carol.get("/games/drawing/state").get_json()["in_round"])
+            self.assertIn("next round", carol.get("/games/drawing").get_data(as_text=True))
             self.assertEqual(alice.post("/games/drawing/submit", data={"image": "nope"}).status_code, 400)
             self.assertEqual(alice.post("/games/drawing/submit", data={"image": self.TINY_JPEG}).status_code, 200)
-            self.assertEqual(alice.post("/games/drawing/submit", data={"image": self.TINY_JPEG}).status_code, 409)
-            self.assertEqual(self.client.get("/tv/state").get_json()["phase"], "drawing")
+            self.assertEqual(bob.post("/games/drawing/submit", data={"image": self.TINY_JPEG}).status_code, 200)
 
-            clock[0] += 30
-            bob.post("/games/drawing/submit", data={"image": self.TINY_JPEG})
             state = self.client.get("/tv/state").get_json()
-            self.assertEqual(state["phase"], "reveal")
-            self.assertEqual((state["reveal"]["nickname"], state["reveal"]["index"], state["reveal"]["total"]), ("Alice", 1, 2))
-            image = self.client.get(f"/games/drawing/image/{state['reveal']['entry_id']}")
+            self.assertEqual((state["phase"], [d["number"] for d in state["drawings"]]), ("voting", [1, 2]))
+            image = self.client.get(f"/games/drawing/image/{state['drawings'][0]['entry_id']}")
             self.assertEqual((image.status_code, image.mimetype), (200, "image/jpeg"))
+            alice.post("/games/drawing/vote", data={"number": "1"})
+            self.assertIsNone(alice.get("/games/drawing/state").get_json()["my_vote"])
+            alice.post("/games/drawing/vote", data={"number": "2"})
+            bob.post("/games/drawing/vote", data={"number": "1"})
+            carol.post("/games/drawing/vote", data={"number": "2"})
 
-            clock[0] += 15
-            self.assertEqual(self.client.get("/tv/state").get_json()["reveal"]["nickname"], "Bob")
-            clock[0] += 15
-            self.assertEqual(self.client.get("/tv/state").get_json()["mode"], "scores")
+            state = self.client.get("/tv/state").get_json()
+            self.assertEqual((state["phase"], [(w["name"], w["votes"]) for w in state["winners"]]), ("results", [("Bob", 2)]))
+            self.assertEqual(state["standings"][0], {"name": "Bob", "points": 1})
+            clock[0] += Quiz.DRAWING_RESULTS_SECONDS
+            state = self.client.get("/tv/state").get_json()
+            self.assertEqual(state["mode"], "scores")
+            board = next(b for b in state["boards"] if b["title"].startswith("Drawing"))
+            self.assertEqual(board["rows"][0], {"name": "Bob", "score": 1})
 
-    def test_drawing_reveal_starts_after_timer_without_all_submissions(self):
+            self.drawing_player("Dave")
+            board = next(b for b in self.client.get("/tv/state").get_json()["boards"] if b["title"].startswith("Drawing"))
+            self.assertEqual({row["score"] for row in board["rows"]}, {0})
+
+    def test_drawing_vote_closes_after_timer(self):
         clock = [1000.0]
         with patch.object(Quiz, "clock", lambda: clock[0]):
-            self.client.post("/games/drawing/new")
             alice = self.drawing_player("Alice")
             self.drawing_player("Bob")
             alice.post("/games/drawing/start")
+            clock[0] += Quiz.DRAWING_PREP_SECONDS
             alice.post("/games/drawing/submit", data={"image": self.TINY_JPEG})
             clock[0] += Quiz.DRAWING_SECONDS + Quiz.DRAWING_SUBMIT_GRACE_SECONDS
             state = self.client.get("/tv/state").get_json()
-            self.assertEqual((state["phase"], state["reveal"]["total"]), ("reveal", 1))
+            self.assertEqual((state["phase"], len(state["drawings"])), ("voting", 1))
+            clock[0] += Quiz.DRAWING_VOTE_SECONDS
+            state = self.client.get("/tv/state").get_json()
+            self.assertEqual((state["phase"], state["winners"]), ("results", []))
 
-    def test_admin_can_end_drawing_round(self):
-        self.client.post("/games/drawing/new")
+    def test_drawing_needs_sign_in_and_admin_can_end_round(self):
+        self.assertIn("/login", self.client.post("/games/drawing/join").headers["Location"])
+        alice = self.drawing_player("Alice")
+        alice.post("/games/drawing/start")
         self.assertEqual(self.client.get("/tv/state").get_json()["mode"], "drawing")
         self.make_admin()
         self.client.post("/admin/drawing/end")

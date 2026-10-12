@@ -118,7 +118,7 @@ Players trade across NYC locations with day-by-day price changes, travel events,
 
 ### Drawing with Friends
 
-`/games/drawing`: someone taps **Start a New Round**, players join with a name, and any joined player taps **Start Drawing**. Everyone gets the same random prompt and 2 minutes to draw on their phone (drawings auto-submit when time runs out). Each drawing is then shown on the TV for 15 seconds in join order, after which the TV goes back to Dopewars scores. The admin page has **End Current Drawing Round** for stuck rounds. Only the last 10 rounds' drawings are kept in `quiz.db`.
+`/games/drawing`: sign in with your name and PIN and tap **Join the Game**. Any player at the table taps **Start Round**: everyone gets the same random prompt, 10 seconds to get ready and 90 seconds to draw (drawings auto-submit). The TV and phones then show the drawings numbered, and everyone at the table votes on their phone for a favourite that isn't their own; voting closes when everyone has voted or after 45 seconds. The drawing with the most votes earns its artist 1 point (ties all score). People who join while a round is running play from the next round, and each new player resets everyone's score to 0. The admin page has **End Current Drawing Round** for stuck rounds. Only the last 10 rounds' drawings are kept in `quiz.db`.
 
 ## TV display
 
