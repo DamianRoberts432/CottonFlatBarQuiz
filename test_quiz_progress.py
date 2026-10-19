@@ -674,6 +674,36 @@ class QuizProgressTestCase(unittest.TestCase):
             conn.commit()
             self.assertEqual(Quiz.drawing_new_prompt(conn), "A moose at prom")
 
+    def test_players_suggest_prompts_for_admin(self):
+        self.assertIn("/login", self.client.post("/games/drawing/suggest", data={"text": "A dog"}).headers["Location"])
+        self.client.post("/login", data={"name": "Sketchy", "pin": "1234"})
+        self.assertIn("Suggest a prompt", self.client.get("/games/drawing").get_data(as_text=True))
+        self.client.post("/games/drawing/suggest", data={"text": "  A <i>moose</i>  bowling "})
+        self.client.post("/games/drawing/suggest", data={"text": "a <i>MOOSE</i> bowling"})
+        reply = self.client.post("/games/drawing/suggest", data={"text": "A goat DJ"}, follow_redirects=True)
+        self.assertIn("waiting for the host", reply.get_data(as_text=True))
+        self.client.post("/games/drawing/suggest", data={"text": "a horse ordering a drink"})
+        with closing(Quiz.db_conn()) as conn:
+            rows = {row["text"]: (row["id"], row["author"]) for row in conn.execute("SELECT * FROM drawing_prompt_suggestions")}
+        self.assertEqual(sorted(rows), ["A <i>moose</i> bowling", "A goat DJ"])
+        self.assertEqual(rows["A goat DJ"][1], "Sketchy")
+        for n in range(3):
+            self.client.post("/games/drawing/suggest", data={"text": f"Idea number {n}"})
+        self.assertIn("Try again later", self.client.post("/games/drawing/suggest", data={"text": "One more"}, follow_redirects=True).get_data(as_text=True))
+        self.client.post(f"/admin/drawing/suggestions/{rows['A goat DJ'][0]}/approve", data={"text": "Sneaky"})
+        self.assertNotIn("Sneaky", self.prompt_rows())
+        admin = self.make_admin(Quiz.app.test_client())
+        page = admin.get("/admin?tab=games").get_data(as_text=True)
+        self.assertIn("A &lt;i&gt;moose&lt;/i&gt; bowling", page)
+        self.assertIn("from Sketchy", page)
+        admin.post(f"/admin/drawing/suggestions/{rows['A <i>moose</i> bowling'][0]}/approve", data={"text": "A moose bowling"})
+        admin.post(f"/admin/drawing/suggestions/{rows['A goat DJ'][0]}/delete")
+        self.assertIn("A moose bowling", self.prompt_rows())
+        self.assertNotIn("A goat DJ", self.prompt_rows())
+        with closing(Quiz.db_conn()) as conn:
+            left = [row["text"] for row in conn.execute("SELECT text FROM drawing_prompt_suggestions")]
+        self.assertEqual(len(left), 3)
+
     def test_friend_and_venue_questions_are_added_once(self):
         def keyed(prefix):
             return [row for row in self.approved_questions() if (row["seed_key"] or "").startswith(prefix)]

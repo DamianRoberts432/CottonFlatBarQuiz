@@ -465,6 +465,9 @@ def init_db():
         );
         CREATE TABLE IF NOT EXISTS drawing_prompts (id INTEGER PRIMARY KEY AUTOINCREMENT, text TEXT NOT NULL UNIQUE, created_at TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS drawing_prompt_seeds (text TEXT PRIMARY KEY);
+        CREATE TABLE IF NOT EXISTS drawing_prompt_suggestions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, text TEXT NOT NULL, author TEXT NOT NULL DEFAULT '', author_id INTEGER, created_at TEXT NOT NULL
+        );
         CREATE TABLE IF NOT EXISTS deleted_seed_keys (seed_key TEXT PRIMARY KEY);
         CREATE TABLE IF NOT EXISTS ads (
             id INTEGER PRIMARY KEY AUTOINCREMENT, business TEXT NOT NULL, message TEXT NOT NULL DEFAULT '', contact TEXT NOT NULL DEFAULT '',
@@ -1478,6 +1481,12 @@ def drawing_render_body(state, error=""):
     drawing_now = phase == "drawing" and state["in_round"] and not state.get("my_submitted")
     if state["joined"] and not drawing_now:
         body.append(drawing_button("/games/drawing/leave", "Leave the Game", "btn-sec small"))
+    if state["signed_in"] and not drawing_now:
+        body.append(
+            "<h3>Got a funny idea?</h3><form method='post' action='/games/drawing/suggest' class='admin-row'>"
+            f"<input name='text' maxlength='{DRAWING_PROMPT_MAX_LENGTH}' required minlength='3' placeholder='Suggest a prompt for future rounds' style='flex:1'>"
+            "<button class='btn btn-sec small' type='submit'>Suggest</button></form>"
+        )
     body.append("<a class='btn btn-sec' href='/'>Back to Menu</a>")
     if not drawing_now:
         body.append(
@@ -1492,7 +1501,42 @@ def drawing_render_body(state, error=""):
 def drawing_game():
     with closing(db_conn()) as conn:
         state = drawing_state(conn, drawing_token())
-    return page("Drawing with Friends", drawing_render_body(state))
+    notice = DRAWING_SUGGEST_NOTICES.get(request.args.get("suggest", ""), "")
+    return page("Drawing with Friends", drawing_render_body(state, notice))
+
+
+DRAWING_SUGGEST_NOTICES = {
+    "sent": "<div class='notice'>Thanks! Your prompt is waiting for the host to approve it.</div>",
+    "full": "<div class='error'>Lots of prompts are already waiting for the host. Try again later.</div>",
+}
+DRAWING_SUGGEST_MAX_PENDING = 100
+DRAWING_SUGGEST_MAX_PER_PLAYER = 5
+
+
+@app.route("/games/drawing/suggest", methods=["POST"])
+def drawing_suggest():
+    with closing(db_conn()) as conn:
+        participant_id = logged_in_participant(conn)
+        if not participant_id:
+            return redirect(url_for("login", next=url_for("drawing_game")))
+        text = clean_prompt(request.form.get("text"))
+        if len(text) < 3:
+            return redirect(url_for("drawing_game"))
+        author = conn.execute("SELECT COALESCE(name, 'Player ' || id) FROM participants WHERE id = ?", (participant_id,)).fetchone()[0]
+        pending = conn.execute("SELECT COUNT(*), SUM(author_id = ?) FROM drawing_prompt_suggestions", (participant_id,)).fetchone()
+        if pending[0] >= DRAWING_SUGGEST_MAX_PENDING or (pending[1] or 0) >= DRAWING_SUGGEST_MAX_PER_PLAYER:
+            return redirect(url_for("drawing_game", suggest="full"))
+        known = conn.execute(
+            "SELECT 1 FROM drawing_prompts WHERE text = ? COLLATE NOCASE UNION SELECT 1 FROM drawing_prompt_suggestions WHERE text = ? COLLATE NOCASE",
+            (text, text),
+        ).fetchone()
+        if not known:
+            conn.execute(
+                "INSERT INTO drawing_prompt_suggestions (text, author, author_id, created_at) VALUES (?, ?, ?, ?)",
+                (text, author, participant_id, now()),
+            )
+            conn.commit()
+    return redirect(url_for("drawing_game", suggest="sent"))
 
 
 @app.route("/games/drawing/state")
@@ -2067,6 +2111,18 @@ def admin_prompts_html(conn):
         f"<input name='text' maxlength='{DRAWING_PROMPT_MAX_LENGTH}' required placeholder='New prompt, e.g. A cat driving a tractor' style='flex:1'>"
         "<button class='btn btn-ok small' type='submit'>Add Prompt</button></form>",
     ]
+    suggestions = conn.execute("SELECT id, text, author FROM drawing_prompt_suggestions ORDER BY id").fetchall()
+    if suggestions:
+        html.append(f"<h3>Suggested by players ({len(suggestions)})</h3><p class='muted'>Fix the wording if you like, then Add it to the game.</p>")
+        for suggestion in suggestions:
+            html.append(
+                f"<form method='post' action='/admin/drawing/suggestions/{suggestion['id']}/approve' class='admin-row'>"
+                f"<input name='text' maxlength='{DRAWING_PROMPT_MAX_LENGTH}' required value='{escape(suggestion['text'])}' style='flex:1'>"
+                f"<span class='muted'>from {escape(suggestion['author'])}</span>"
+                "<button class='btn btn-ok small' type='submit'>Add</button>"
+                f"<button class='btn btn-del small' formaction='/admin/drawing/suggestions/{suggestion['id']}/delete' formnovalidate>Delete</button></form>"
+            )
+        html.append("<h3>All prompts</h3>")
     for prompt in prompts:
         html.append(
             f"<form method='post' action='/admin/drawing/prompts/{prompt['id']}' class='admin-row'>"
@@ -2079,6 +2135,31 @@ def admin_prompts_html(conn):
 
 def clean_prompt(value):
     return re.sub(r"\s+", " ", value or "").strip()[:DRAWING_PROMPT_MAX_LENGTH]
+
+
+@app.route("/admin/drawing/suggestions/<int:suggestion_id>/approve", methods=["POST"])
+def admin_approve_suggestion(suggestion_id):
+    denied = require_admin()
+    if denied:
+        return denied
+    text = clean_prompt(request.form.get("text"))
+    with closing(db_conn()) as conn:
+        if text and conn.execute("SELECT 1 FROM drawing_prompt_suggestions WHERE id = ?", (suggestion_id,)).fetchone():
+            conn.execute("INSERT OR IGNORE INTO drawing_prompts (text, created_at) VALUES (?, ?)", (text, now()))
+            conn.execute("DELETE FROM drawing_prompt_suggestions WHERE id = ?", (suggestion_id,))
+            conn.commit()
+    return admin_redirect("games")
+
+
+@app.route("/admin/drawing/suggestions/<int:suggestion_id>/delete", methods=["POST"])
+def admin_delete_suggestion(suggestion_id):
+    denied = require_admin()
+    if denied:
+        return denied
+    with closing(db_conn()) as conn:
+        conn.execute("DELETE FROM drawing_prompt_suggestions WHERE id = ?", (suggestion_id,))
+        conn.commit()
+    return admin_redirect("games")
 
 
 @app.route("/admin/drawing/prompts", methods=["POST"])
