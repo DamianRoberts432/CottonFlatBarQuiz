@@ -3,6 +3,7 @@ from collections import Counter
 from contextlib import closing
 from datetime import datetime
 from html import escape
+from urllib.parse import quote
 import json
 import math
 import os
@@ -540,7 +541,7 @@ def init_db():
 
 BASE_STYLE = """
 <style>
-*{box-sizing:border-box}body{font-family:Arial,sans-serif;background:#0f1115;color:#f4f7ff;padding:20px;margin:0;min-height:100vh;display:flex;justify-content:center}.card{width:min(900px,100%);background:#171b22;border:1px solid #2a3140;border-radius:12px;padding:20px;box-shadow:0 10px 30px rgba(0,0,0,.25)}.left{display:flex;flex-direction:column;gap:12px}.muted{color:#a7b0c0}.error{background:#4a1b1b;border:1px solid #6d2f2f;padding:10px;border-radius:8px;color:#ffd1d1}.notice{background:#182d1e;border:1px solid #2b4e34;padding:10px;border-radius:8px;color:#d7f9d1}.btn{display:inline-block;padding:10px 18px;border-radius:8px;text-decoration:none;color:#fff;font-weight:700;cursor:pointer;border:none;margin:6px 0}.btn-ok{background:#2f7cf6}.btn-sec{background:#2a3140}.btn-warn{background:#d28a00}.btn-del{background:#b62d2d}.btn-buy{background:#c83333}.btn-sell{background:#2f7cf6}.btn-travel{background:#e0b100;color:#171b22}.btn-bank{background:#1f9d5a}.btn-debt{background:#e08400}.btn-reset{background:#c52ecf}.btn-quit{background:#10a9d6}.small{padding:6px 12px;font-size:12px}.question{background:#111821;border:1px solid #2a3140;border-radius:10px;padding:14px}.choice{display:flex;align-items:center;gap:8px;background:#161d2a;padding:10px;border-radius:8px}.resp{background:#121822;border:1px solid #2a3140;padding:10px;border-radius:8px;margin:5px 0}.bar{width:100%;height:12px;background:#1e2430;border-radius:999px;overflow:hidden;margin:8px 0}.fill{height:100%;background:#2f7cf6}.admin-row{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:10px}.bank-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px}textarea,input,select{width:100%;padding:10px;border-radius:8px;border:1px solid #485264;background:#0d1219;color:#f4f7ff}.table{width:100%;border-collapse:collapse}th,td{padding:8px 10px;border-bottom:1px solid #2a3140;text-align:left}h1,h2,h3{margin:0 0 12px}.form{display:flex;flex-direction:column;gap:12px}input[type='radio']{width:auto}a{color:#9ac1ff}
+*{box-sizing:border-box}body{font-family:Arial,sans-serif;background:#0f1115;color:#f4f7ff;padding:20px;margin:0;min-height:100vh;display:flex;justify-content:center}.card{width:min(900px,100%);background:#171b22;border:1px solid #2a3140;border-radius:12px;padding:20px;box-shadow:0 10px 30px rgba(0,0,0,.25)}.left{display:flex;flex-direction:column;gap:12px}.muted{color:#a7b0c0}.error{background:#4a1b1b;border:1px solid #6d2f2f;padding:10px;border-radius:8px;color:#ffd1d1}.notice{background:#182d1e;border:1px solid #2b4e34;padding:10px;border-radius:8px;color:#d7f9d1}.btn{display:inline-block;padding:10px 18px;border-radius:8px;text-decoration:none;color:#fff;font-weight:700;cursor:pointer;border:none;margin:6px 0}.btn-ok{background:#2f7cf6}.btn-sec{background:#2a3140}.btn-warn{background:#d28a00}.btn-del{background:#b62d2d}.btn-buy{background:#c83333}.btn-sell{background:#2f7cf6}.btn-travel{background:#e0b100;color:#171b22}.btn-bank{background:#1f9d5a}.btn-debt{background:#e08400}.btn-reset{background:#c52ecf}.btn-quit{background:#10a9d6}.small{padding:6px 12px;font-size:12px}.question{background:#111821;border:1px solid #2a3140;border-radius:10px;padding:14px}.choice{display:flex;align-items:center;gap:8px;background:#161d2a;padding:10px;border-radius:8px}.resp{background:#121822;border:1px solid #2a3140;padding:10px;border-radius:8px;margin:5px 0}.bar{width:100%;height:12px;background:#1e2430;border-radius:999px;overflow:hidden;margin:8px 0}.fill{height:100%;background:#2f7cf6}.admin-row{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:10px}.bank-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px}textarea,input,select{width:100%;padding:10px;border-radius:8px;border:1px solid #485264;background:#0d1219;color:#f4f7ff}.table{width:100%;border-collapse:collapse}th,td{padding:8px 10px;border-bottom:1px solid #2a3140;text-align:left}h1,h2,h3{margin:0 0 12px}.form{display:flex;flex-direction:column;gap:12px}input[type='radio']{width:auto}a{color:#9ac1ff}.admin-head{display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:8px}.admin-head h1,.admin-head h2{margin:0}.tabs{display:flex;flex-wrap:wrap;gap:6px;margin:14px 0 18px;padding-bottom:10px;border-bottom:2px solid #2a3140}.tab{padding:8px 14px;border-radius:8px;background:#1e2430;color:#cfd8ea;text-decoration:none;font-weight:700}.tab.active{background:#2f7cf6;color:#fff}.admin-row form{margin:0}.admin-row .btn{margin:0}td .admin-row{margin-top:0}.opts{color:#a7b0c0;font-size:13px;margin-top:4px}.pager{display:flex;gap:8px;align-items:center;margin-top:12px}
 </style>
 """
 
@@ -723,7 +724,7 @@ def question_form(title, action, question=None, error=""):
         <label>Question</label><textarea name='text' maxlength='{MAX_QUESTION_LENGTH}' required>{escape(strip_internal_round_labels(question.get('text', '') or ''))}</textarea>
         <label>Response type</label><select name='question_type'><option value='open' {'selected' if question_type == 'open' else ''}>Free-write response</option><option value='choice' {'selected' if question_type == 'choice' else ''}>Multiple choice</option></select>
         <label>Choices</label><input name='op1' maxlength='{MAX_OPTION_LENGTH}' value='{fields[0]}' placeholder='Choice 1'><input name='op2' maxlength='{MAX_OPTION_LENGTH}' value='{fields[1]}' placeholder='Choice 2'><input name='op3' maxlength='{MAX_OPTION_LENGTH}' value='{fields[2]}' placeholder='Choice 3'><input name='op4' maxlength='{MAX_OPTION_LENGTH}' value='{fields[3]}' placeholder='Choice 4'>
-        <button class='btn btn-ok' type='submit'>Save</button><a class='btn btn-sec' href='/admin'>Cancel</a></form>""")
+        <button class='btn btn-ok' type='submit'>Save</button><a class='btn btn-sec' href='/admin?tab={'submissions' if 'suggestion' in action else 'questions'}'>Cancel</a></form>""")
 
 
 def dopewars_inventory():
@@ -1485,7 +1486,7 @@ def drawing_admin_end():
         current_round = drawing_current_round(conn)
         if current_round:
             drawing_end_round(conn, current_round[0]["id"], "cancelled")
-    return redirect(url_for("admin"))
+    return admin_redirect("games")
 
 
 @app.route("/games")
@@ -1804,6 +1805,101 @@ def admin_tv_html(conn):
     return "".join(html)
 
 
+def admin_redirect(tab):
+    return redirect(url_for("admin", tab=tab))
+
+
+def admin_players_html(conn):
+    participants = participant_stats(conn)
+    if not participants:
+        return "<h2>Players & Drink Tokens</h2><p class='muted'>No players yet.</p>"
+    body = (
+        "<h2>Players & Drink Tokens</h2><p class='muted'>Redeem a token when a player shows you their screen. Rename fixes rude or duplicate names.</p>"
+        "<div style='overflow-x:auto'><table class='table'><tr><th>Player</th><th>Answered</th><th>Tokens ready</th><th>Given</th><th>Progress</th><th>Action</th></tr>"
+    )
+    for participant in participants:
+        progress = participant["answered"] % TOKEN_MILESTONE
+        body += f"<tr><td>{escape(participant['name'])}</td><td>{participant['answered']}</td><td>{participant['unredeemed']}</td><td>{participant['redeemed']}</td><td>{progress}/{TOKEN_MILESTONE}</td><td><a class='btn btn-ok small' href='/admin/redeem-token/{participant['id']}'>Redeem</a><form method='post' action='/admin/rename/{participant['id']}' class='admin-row'><input name='name' maxlength='{PLAYER_NAME_MAX_LENGTH}' required placeholder='New name' style='width:auto'><button class='btn btn-warn small'>Rename</button></form></td></tr>"
+    return body + "</table></div>"
+
+
+def admin_submissions_html(conn):
+    suggestions = conn.execute("SELECT * FROM suggestions ORDER BY id ASC").fetchall()
+    body = "<h2>Submitted Questions</h2>"
+    if not suggestions:
+        return body + "<p class='muted'>Nothing waiting. Patrons send these from Submit Question on the menu.</p>"
+    body += "<p class='muted'>Approve adds the question to the quiz. Edit first if it needs fixing.</p>"
+    for suggestion in suggestions:
+        body += f"<div class='question left'><strong>{escape(strip_internal_round_labels(suggestion['text']))}</strong><p class='muted'>{ 'Free write' if suggestion['is_open_text'] else 'Multiple choice'}</p>"
+        if not suggestion["is_open_text"]:
+            body += "<br>".join(escape(option) for option in options_for(suggestion))
+        body += f"<div class='admin-row'><a class='btn btn-warn small' href='/admin/edit-suggestion/{suggestion['id']}'>Edit</a><form method='post' action='/admin/approve/{suggestion['id']}'><button class='btn btn-ok small'>Approve</button></form><form method='post' action='/admin/reject/{suggestion['id']}'><button class='btn btn-del small'>Reject</button></form></div></div>"
+    return body
+
+
+def admin_questions_html(conn):
+    search = re.sub(r"[%_]", "", request.args.get("q", "")).strip()[:100]
+    where, params = ("WHERE text LIKE ?", (f"%{search}%",)) if search else ("", ())
+    total = conn.execute(f"SELECT COUNT(*) FROM questions {where}", params).fetchone()[0]
+    pages = max(1, math.ceil(total / ADMIN_QUESTIONS_PER_PAGE))
+    page_no = min(max(parse_positive_int(request.args.get("p")) or 1, 1), pages)
+    offset = (page_no - 1) * ADMIN_QUESTIONS_PER_PAGE
+    rows = conn.execute(
+        f"SELECT * FROM questions {where} ORDER BY question_number DESC, id DESC LIMIT ? OFFSET ?",
+        params + (ADMIN_QUESTIONS_PER_PAGE, offset),
+    ).fetchall()
+    html = [
+        "<div class='admin-head'><h2>Quiz Questions</h2><a class='btn btn-ok small' href='/admin/add-question'>Add Question</a></div>",
+        "<form method='get' action='/admin' class='admin-row'><input type='hidden' name='tab' value='questions'>"
+        f"<input name='q' value='{escape(search)}' placeholder='Search questions' style='flex:1'>"
+        "<button class='btn btn-sec small' type='submit'>Search</button>"
+        + ("<a class='btn btn-sec small' href='/admin?tab=questions'>Clear</a>" if search else "") + "</form>",
+    ]
+    if not rows:
+        html.append("<p class='muted'>No questions found.</p>")
+        return "".join(html)
+    html.append(f"<p class='muted'>Showing {offset + 1}-{offset + len(rows)} of {total}, newest first.</p><table class='table'><tr><th>#</th><th>Question</th><th>Action</th></tr>")
+    for question in rows:
+        options = "" if question["is_open_text"] else "<div class='opts'>" + " · ".join(escape(option) for option in options_for(question)) + "</div>"
+        kind = "Free write" if question["is_open_text"] else "Multiple choice"
+        html.append(
+            f"<tr><td>{question['question_number']}</td><td><div>{escape(strip_internal_round_labels(question['text']))}</div>{options}<div class='opts'>{kind}</div></td>"
+            f"<td><div class='admin-row'><a class='btn btn-warn small' href='/admin/edit-question/{question['id']}'>Edit</a>"
+            f"<form method='post' action='/admin/delete-question-number/{question['question_number']}' onsubmit='return confirm(&quot;Delete this question and all its answers?&quot;);'>"
+            "<button class='btn btn-del small'>Delete</button></form></div></td></tr>"
+        )
+    html.append("</table>")
+    if pages > 1:
+        def link(number, label):
+            return f"<a class='btn btn-sec small' href='/admin?tab=questions&p={number}&q={quote(search)}'>{label}</a>"
+        html.append(
+            "<div class='pager'>" + (link(page_no - 1, "Previous") if page_no > 1 else "")
+            + f"<span class='muted'>Page {page_no} of {pages}</span>" + (link(page_no + 1, "Next") if page_no < pages else "") + "</div>"
+        )
+    return "".join(html)
+
+
+def admin_games_html(conn):
+    return (
+        "<h2>Games</h2><div class='admin-row'><a class='btn btn-sec small' href='/games/dopewars'>Dopewars</a>"
+        "<a class='btn btn-sec small' href='/games/drawing'>Drawing with Friends</a>"
+        "<form method='post' action='/admin/drawing/end' onsubmit='return confirm(&quot;End the current drawing round?&quot;);'>"
+        "<button class='btn btn-del small'>End Current Drawing Round</button></form></div>"
+        "<p class='muted'>Dopewars high scores are managed under TV Screens.</p>"
+    ) + admin_prompts_html(conn)
+
+
+ADMIN_QUESTIONS_PER_PAGE = 25
+ADMIN_TAB_LABELS = {"players": "Players & Tokens", "questions": "Questions", "submissions": "Submissions", "tv": "TV Screens", "games": "Games & Prompts"}
+ADMIN_TAB_RENDERERS = {
+    "players": admin_players_html,
+    "questions": admin_questions_html,
+    "submissions": admin_submissions_html,
+    "tv": admin_tv_html,
+    "games": admin_games_html,
+}
+
+
 @app.route("/admin", methods=["GET", "POST"])
 def admin():
     if request.method == "POST" and request.form.get("action") == "login":
@@ -1814,36 +1910,27 @@ def admin():
     if not admin_required():
         return page("Admin", "<h1>Host Admin</h1><form method='post'><input type='password' name='password' required placeholder='Admin code'><input type='hidden' name='action' value='login'><button class='btn btn-ok' type='submit'>Log In</button></form>")
 
+    tab = request.args.get("tab", "players")
+    if tab not in ADMIN_TAB_LABELS:
+        tab = "players"
     with closing(db_conn()) as conn:
-        suggestions = conn.execute("SELECT * FROM suggestions ORDER BY id ASC").fetchall()
-        questions = conn.execute("SELECT * FROM questions ORDER BY id DESC").fetchall()
-        participants = participant_stats(conn)
-        tv_html = admin_tv_html(conn)
-        prompts_html = admin_prompts_html(conn)
-    body = "<h1>Host Admin</h1><form method='post' action='/admin/play-as-host'><button class='btn btn-ok' type='submit'>Play as Host (quiz, Dopewars, drawing)</button></form><a class='btn btn-ok' href='/admin/add-question'>Add Question</a><h2>Participant Drink Tokens</h2>"
-    if participants:
-        body += "<table class='table'><tr><th>Player</th><th>Answered</th><th>Tokens ready</th><th>Given</th><th>Progress</th><th>Action</th></tr>"
-        for participant in participants:
-            progress = participant["answered"] % TOKEN_MILESTONE
-            body += f"<tr><td>{escape(participant['name'])}</td><td>{participant['answered']}</td><td>{participant['unredeemed']}</td><td>{participant['redeemed']}</td><td>{progress}/{TOKEN_MILESTONE}</td><td><a class='btn btn-ok small' href='/admin/redeem-token/{participant['id']}'>Redeem</a><form method='post' action='/admin/rename/{participant['id']}' class='admin-row'><input name='name' maxlength='{PLAYER_NAME_MAX_LENGTH}' required placeholder='New name' style='width:auto'><button class='btn btn-warn small'>Rename</button></form></td></tr>"
-        body += "</table>"
-    else:
-        body += "<p class='muted'>No participants yet.</p>"
-    body += "<h2>Pending Submissions</h2>"
-    if not suggestions:
-        body += "<p class='muted'>No pending submissions.</p>"
-    for suggestion in suggestions:
-        body += f"<div class='question left'><strong>{escape(strip_internal_round_labels(suggestion['text']))}</strong><p class='muted'>{ 'Free write' if suggestion['is_open_text'] else 'Multiple choice'}</p>"
-        if not suggestion["is_open_text"]:
-            body += "<br>".join(escape(option) for option in options_for(suggestion))
-        body += f"<div class='admin-row'><a class='btn btn-warn small' href='/admin/edit-suggestion/{suggestion['id']}'>Edit</a><form method='post' action='/admin/approve/{suggestion['id']}'><button class='btn btn-ok small'>Approve</button></form><form method='post' action='/admin/reject/{suggestion['id']}'><button class='btn btn-del small'>Reject</button></form></div></div>"
-    body += "<h2>Active Questions</h2>"
-    for question in questions:
-        kind = "Free write" if question["is_open_text"] else "Multiple choice"
-        body += f"<div class='question left'><strong>{escape(strip_internal_round_labels(question['text']))}</strong><p class='muted'>{kind} · Question {question['question_number']} · ID {question['id']}</p><div class='admin-row'><a class='btn btn-warn small' href='/admin/edit-question/{question['id']}'>Edit</a><form method='post' action='/admin/delete-question-number/{question['question_number']}' onsubmit=\"return confirm('Delete this question and all answers?');\"><button class='btn btn-del small'>Delete</button></form></div></div>"
-    body += tv_html
-    body += "<h2>Drawing with Friends</h2><form method='post' action='/admin/drawing/end' onsubmit=\"return confirm('End the current drawing round?');\"><button class='btn btn-del small'>End Current Drawing Round</button></form>" + prompts_html
-    body += "<a class='btn btn-sec' href='/tv'>TV Screen</a><a class='btn btn-sec' href='/answers'>View Community Answers</a><a class='btn btn-sec' href='/gold-users'>View Gold Users</a><a class='btn btn-sec' href='/admin/logout'>Log Out</a><a class='btn btn-sec' href='/'>Back to Menu</a>"
+        counts = {
+            "questions": conn.execute("SELECT COUNT(*) FROM questions").fetchone()[0],
+            "submissions": conn.execute("SELECT COUNT(*) FROM suggestions").fetchone()[0],
+        }
+        content = ADMIN_TAB_RENDERERS[tab](conn)
+    nav = "".join(
+        f"<a class='tab{' active' if key == tab else ''}' href='/admin?tab={key}'>{label}{f' ({counts[key]})' if key in counts else ''}</a>"
+        for key, label in ADMIN_TAB_LABELS.items()
+    )
+    body = (
+        "<div class='admin-head'><h1>Host Admin</h1><div class='admin-row'>"
+        "<form method='post' action='/admin/play-as-host'><button class='btn btn-ok small' type='submit'>Play as Host</button></form>"
+        "<a class='btn btn-sec small' href='/tv'>TV Screen</a><a class='btn btn-sec small' href='/answers'>Community Answers</a>"
+        "<a class='btn btn-sec small' href='/gold-users'>Gold Users</a><a class='btn btn-sec small' href='/'>Menu</a>"
+        "<a class='btn btn-sec small' href='/admin/logout'>Log Out</a></div></div>"
+        f"<nav class='tabs'>{nav}</nav>{content}"
+    )
     return page("Host Admin", body)
 
 
@@ -1879,7 +1966,7 @@ def admin_add_prompt():
         with closing(db_conn()) as conn:
             conn.execute("INSERT OR IGNORE INTO drawing_prompts (text, created_at) VALUES (?, ?)", (text, now()))
             conn.commit()
-    return redirect(url_for("admin"))
+    return admin_redirect("games")
 
 
 @app.route("/admin/drawing/prompts/<int:prompt_id>", methods=["POST"])
@@ -1892,7 +1979,7 @@ def admin_edit_prompt(prompt_id):
         with closing(db_conn()) as conn:
             conn.execute("UPDATE OR IGNORE drawing_prompts SET text = ? WHERE id = ?", (text, prompt_id))
             conn.commit()
-    return redirect(url_for("admin"))
+    return admin_redirect("games")
 
 
 @app.route("/admin/drawing/prompts/<int:prompt_id>/delete", methods=["POST"])
@@ -1903,7 +1990,7 @@ def admin_delete_prompt(prompt_id):
     with closing(db_conn()) as conn:
         conn.execute("DELETE FROM drawing_prompts WHERE id = ?", (prompt_id,))
         conn.commit()
-    return redirect(url_for("admin"))
+    return admin_redirect("games")
 
 
 @app.route("/admin/play-as-host", methods=["POST"])
@@ -1939,7 +2026,7 @@ def admin_rename(participant_id):
             conn.execute("UPDATE participants SET name = ?, name_key = ? WHERE id = ?", (name, name.casefold(), participant_id))
             conn.execute("UPDATE drawing_players SET nickname = ? WHERE participant_id = ?", (name, participant_id))
             conn.commit()
-    return redirect(url_for("admin"))
+    return admin_redirect("players")
 
 
 @app.route("/admin/tv/screen/<key>", methods=["POST"])
@@ -1955,7 +2042,7 @@ def admin_tv_screen(key):
                 (key, title, 1 if request.form.get("enabled") else 0),
             )
             conn.commit()
-    return redirect(url_for("admin"))
+    return admin_redirect("tv")
 
 
 @app.route("/admin/tv/clear/<key>", methods=["POST"])
@@ -1972,7 +2059,7 @@ def admin_tv_clear(key):
         with closing(db_conn()) as conn:
             conn.execute(statement)
             conn.commit()
-    return redirect(url_for("admin"))
+    return admin_redirect("tv")
 
 
 @app.route("/admin/dopewars-score/<int:participant_id>/delete", methods=["POST"])
@@ -1983,7 +2070,7 @@ def admin_delete_dopewars_score(participant_id):
     with closing(db_conn()) as conn:
         conn.execute("DELETE FROM dopewars_scores WHERE participant_id = ?", (participant_id,))
         conn.commit()
-    return redirect(url_for("admin"))
+    return admin_redirect("tv")
 
 
 @app.route("/admin/tv/message", methods=["POST"])
@@ -1997,7 +2084,7 @@ def admin_tv_message():
         with closing(db_conn()) as conn:
             conn.execute("INSERT INTO tv_messages (title, body) VALUES (?, ?)", (title, text))
             conn.commit()
-    return redirect(url_for("admin"))
+    return admin_redirect("tv")
 
 
 @app.route("/admin/tv/message/<int:message_id>/delete", methods=["POST"])
@@ -2008,7 +2095,7 @@ def admin_tv_message_delete(message_id):
     with closing(db_conn()) as conn:
         conn.execute("DELETE FROM tv_messages WHERE id = ?", (message_id,))
         conn.commit()
-    return redirect(url_for("admin"))
+    return admin_redirect("tv")
 
 
 @app.route("/admin/redeem-token/<int:participant_id>", methods=["GET", "POST"])
@@ -2021,7 +2108,7 @@ def redeem_token(participant_id):
         if token:
             conn.execute("UPDATE drink_tokens SET redeemed_at = ? WHERE id = ?", (now(), token["id"]))
             conn.commit()
-    return redirect(url_for("admin"))
+    return admin_redirect("players")
 
 
 @app.route("/admin/add-question", methods=["GET", "POST"])
@@ -2039,7 +2126,7 @@ def add_question():
             with closing(db_conn()) as conn:
                 conn.execute("INSERT INTO questions (text, is_open_text, op1, op2, op3, op4, approved, created_at, question_number) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)", (text[:500], is_open, options[0][:200], options[1][:200], options[2][:200], options[3][:200], now(), next_question_number(conn)))
                 conn.commit()
-            return redirect(url_for("admin"))
+            return admin_redirect("questions")
     return question_form("Add Question", url_for("add_question"), {"is_open_text": 1}, error)
 
 
@@ -2065,7 +2152,7 @@ def edit_question(question_id):
             conn.execute("UPDATE questions SET text = ?, is_open_text = ?, op1 = ?, op2 = ?, op3 = ?, op4 = ? WHERE id = ?", (text[:500], is_open, options[0][:200], options[1][:200], options[2][:200], options[3][:200], question_id))
             conn.commit()
             conn.close()
-            return redirect(url_for("admin"))
+            return admin_redirect("questions")
     result = question_form("Edit Question", url_for("edit_question", question_id=question_id), question, error)
     conn.close()
     return result
@@ -2093,7 +2180,7 @@ def edit_suggestion(suggestion_id):
             conn.execute("UPDATE suggestions SET text = ?, is_open_text = ?, op1 = ?, op2 = ?, op3 = ?, op4 = ? WHERE id = ?", (text[:500], is_open, options[0][:200], options[1][:200], options[2][:200], options[3][:200], suggestion_id))
             conn.commit()
             conn.close()
-            return redirect(url_for("admin"))
+            return admin_redirect("submissions")
     result = question_form("Edit Submission", url_for("edit_suggestion", suggestion_id=suggestion_id), suggestion, error)
     conn.close()
     return result
@@ -2111,7 +2198,7 @@ def approve_suggestion(suggestion_id):
             conn.execute("INSERT INTO questions (text, is_open_text, op1, op2, op3, op4, approved, created_at, question_number) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)", (text, suggestion["is_open_text"], suggestion["op1"], suggestion["op2"], suggestion["op3"], suggestion["op4"], now(), next_question_number(conn)))
             conn.execute("DELETE FROM suggestions WHERE id = ?", (suggestion_id,))
             conn.commit()
-    return redirect(url_for("admin"))
+    return admin_redirect("submissions")
 
 
 @app.route("/admin/reject/<int:suggestion_id>", methods=["POST"])
@@ -2122,7 +2209,7 @@ def reject_suggestion(suggestion_id):
     with closing(db_conn()) as conn:
         conn.execute("DELETE FROM suggestions WHERE id = ?", (suggestion_id,))
         conn.commit()
-    return redirect(url_for("admin"))
+    return admin_redirect("submissions")
 
 
 def forget_seed_question(conn, question_id):
@@ -2141,7 +2228,7 @@ def delete_question(question_id):
         conn.execute("DELETE FROM participant_answers WHERE question_id = ?", (question_id,))
         conn.execute("DELETE FROM questions WHERE id = ?", (question_id,))
         conn.commit()
-    return redirect(url_for("admin"))
+    return admin_redirect("questions")
 
 
 @app.route("/admin/delete-question-number/<int:question_number>", methods=["POST"])
@@ -2160,7 +2247,7 @@ def delete_question_number(question_number):
             conn.execute("DELETE FROM participant_answers WHERE question_id = ?", (question["id"],))
             conn.execute("DELETE FROM questions WHERE id = ?", (question["id"],))
             conn.commit()
-    return redirect(url_for("admin"))
+    return admin_redirect("questions")
 
 
 @app.route("/admin/delete-response/<int:response_id>", methods=["POST"])

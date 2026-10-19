@@ -658,9 +658,9 @@ class QuizProgressTestCase(unittest.TestCase):
         self.client.post("/admin/drawing/prompts", data={"text": "Sneaky"})
         self.assertNotIn("Sneaky", self.prompt_rows())
         self.make_admin()
-        self.assertIn("A horse ordering a drink", self.client.get("/admin").get_data(as_text=True))
+        self.assertIn("A horse ordering a drink", self.client.get("/admin?tab=games").get_data(as_text=True))
         self.client.post("/admin/drawing/prompts", data={"text": "  A <b>moose</b>   at prom "})
-        self.assertIn("A &lt;b&gt;moose&lt;/b&gt; at prom", self.client.get("/admin").get_data(as_text=True))
+        self.assertIn("A &lt;b&gt;moose&lt;/b&gt; at prom", self.client.get("/admin?tab=games").get_data(as_text=True))
         new_id = self.prompt_rows()["A <b>moose</b> at prom"]
         self.client.post(f"/admin/drawing/prompts/{new_id}", data={"text": "A moose at prom"})
         self.client.post(f"/admin/drawing/prompts/{prompts['A horse ordering a drink']}/delete")
@@ -689,6 +689,25 @@ class QuizProgressTestCase(unittest.TestCase):
         self.client.post(f"/admin/delete-question/{venue[0]['id']}")
         Quiz.init_db()
         self.assertEqual((len(keyed("friends-")), len(keyed("venue-"))), (49, 19))
+
+    def test_admin_tabs_split_the_page(self):
+        self.assertNotIn("Quiz Questions", self.client.get("/admin?tab=questions").get_data(as_text=True))
+        self.make_admin()
+        home = self.client.get("/admin").get_data(as_text=True)
+        self.assertIn("Players & Drink Tokens", home)
+        self.assertNotIn("Edit</a>", home)
+        total = len(self.approved_questions())
+        first = self.client.get("/admin?tab=questions").get_data(as_text=True)
+        self.assertIn(f"of {total}, newest first", first)
+        self.assertEqual(first.count("/admin/edit-question/"), Quiz.ADMIN_QUESTIONS_PER_PAGE)
+        last = self.client.get(f"/admin?tab=questions&p=999").get_data(as_text=True)
+        self.assertIn("Previous", last)
+        found = self.client.get("/admin?tab=questions&q=bands or artists").get_data(as_text=True)
+        self.assertIn("Showing 1-1 of 1", found)
+        for tab in ("submissions", "tv", "games", "bogus"):
+            self.assertEqual(self.client.get(f"/admin?tab={tab}").status_code, 200)
+        reply = self.client.post("/admin/drawing/prompts", data={"text": "Tab check"})
+        self.assertTrue(reply.headers["Location"].endswith("/admin?tab=games"))
 
 if __name__ == "__main__":
     unittest.main()
