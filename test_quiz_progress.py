@@ -646,5 +646,32 @@ class QuizProgressTestCase(unittest.TestCase):
         boards = self.client.get("/tv/state").get_json()["boards"]
         self.assertEqual(([b["title"] for b in boards], boards[1]["rows"]), (["Top Hustlers", "MVPs", "Drawing with Friends Scores"], []))
 
+    def prompt_rows(self):
+        with closing(Quiz.db_conn()) as conn:
+            return {row["text"]: row["id"] for row in conn.execute("SELECT id, text FROM drawing_prompts")}
+
+    def test_admin_manages_drawing_prompts(self):
+        prompts = self.prompt_rows()
+        self.assertEqual(len(prompts), len(Quiz.DRAWING_PROMPTS))
+        self.assertGreaterEqual(len(prompts), 90)
+        self.assertIn("A horse ordering a drink", prompts)
+        self.client.post("/admin/drawing/prompts", data={"text": "Sneaky"})
+        self.assertNotIn("Sneaky", self.prompt_rows())
+        self.make_admin()
+        self.assertIn("A horse ordering a drink", self.client.get("/admin").get_data(as_text=True))
+        self.client.post("/admin/drawing/prompts", data={"text": "  A <b>moose</b>   at prom "})
+        self.assertIn("A &lt;b&gt;moose&lt;/b&gt; at prom", self.client.get("/admin").get_data(as_text=True))
+        new_id = self.prompt_rows()["A <b>moose</b> at prom"]
+        self.client.post(f"/admin/drawing/prompts/{new_id}", data={"text": "A moose at prom"})
+        self.client.post(f"/admin/drawing/prompts/{prompts['A horse ordering a drink']}/delete")
+        rows = self.prompt_rows()
+        self.assertEqual((rows.get("A moose at prom"), "A horse ordering a drink" in rows), (new_id, False))
+        Quiz.init_db()
+        self.assertNotIn("A horse ordering a drink", self.prompt_rows())
+        with closing(Quiz.db_conn()) as conn:
+            conn.execute("DELETE FROM drawing_prompts WHERE text != 'A moose at prom'")
+            conn.commit()
+            self.assertEqual(Quiz.drawing_new_prompt(conn), "A moose at prom")
+
 if __name__ == "__main__":
     unittest.main()

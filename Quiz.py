@@ -111,7 +111,58 @@ DRAWING_PROMPTS = [
     "A pig with a fancy mustache",
     "A UFO abducting a pickup truck",
     "A mermaid at a car wash",
+    "A bull riding a mechanical cowboy",
+    "A banjo with stage fright",
+    "The jukebox's worst nightmare",
+    "Your truck if it could dance",
+    "A possum working the door",
+    "A tumbleweed looking for love",
+    "A beaver building a beer fountain",
+    "The band's tour van after 30 days",
+    "A guitar that only plays sad songs",
+    "A cactus at a pool party",
+    "Your best friend as a superhero",
+    "A cowboy boot full of surprises",
+    "The world's smallest rodeo",
+    "A hot dog running a marathon",
+    "A lizard singing the blues",
+    "Darts thrown by a toddler",
+    "A rattlesnake playing maracas",
+    "The last call stampede",
+    "A haunted pool table",
+    "A coyote howling karaoke",
+    "An astronaut at a honky-tonk",
+    "A buffalo in a tutu",
+    "The perfect bar snack",
+    "A taco riding a skateboard",
+    "A rock star's pet goldfish",
+    "A roadrunner at a speed trap",
+    "A fiddle on fire",
+    "Your dream tattoo",
+    "A bear trying to open a beer",
+    "A disco ball at a funeral",
+    "A sloth DJ",
+    "A mosquito the size of a pickup",
+    "The bartender's secret recipe",
+    "A heart wearing cowboy boots",
+    "A llama at a mosh pit",
+    "A dog walking its human",
+    "The moon at last call",
+    "A drum kit made of pots and pans",
+    "Two friends stuck in an elevator",
+    "Your first concert",
+    "A chili pepper that can't handle spice",
+    "A cowgirl lassoing a UFO",
+    "A pizza delivered by eagle",
+    "An owl hosting trivia night",
+    "A tornado that only takes socks",
+    "Your spirit animal at a bar",
+    "A beer bottle in love with a lime",
+    "A jalapeno in a hot tub",
+    "A ghost who wants a selfie",
+    "A horse ordering a drink",
 ]
+DRAWING_PROMPT_MAX_LENGTH = 120
 
 
 def strip_internal_round_labels(text):
@@ -319,6 +370,8 @@ def init_db():
             round_id INTEGER NOT NULL, voter_token TEXT NOT NULL, entry_id INTEGER NOT NULL, voted_at REAL NOT NULL,
             PRIMARY KEY(round_id, voter_token)
         );
+        CREATE TABLE IF NOT EXISTS drawing_prompts (id INTEGER PRIMARY KEY AUTOINCREMENT, text TEXT NOT NULL UNIQUE, created_at TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS drawing_prompt_seeds (text TEXT PRIMARY KEY);
         CREATE TABLE IF NOT EXISTS tv_screens (key TEXT PRIMARY KEY, title TEXT NOT NULL, enabled INTEGER NOT NULL DEFAULT 1);
         CREATE TABLE IF NOT EXISTS tv_messages (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL, body TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS dopewars_scores (
@@ -348,6 +401,12 @@ def init_db():
     conn.execute("CREATE INDEX IF NOT EXISTS idx_participant_answers_participant ON participant_answers(participant_id)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_tokens_participant ON drink_tokens(participant_id)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_dopewars_scores_top_score ON dopewars_scores(top_score DESC, achieved_at ASC)")
+
+    seeded_prompts = {row["text"] for row in conn.execute("SELECT text FROM drawing_prompt_seeds")}
+    for prompt in DRAWING_PROMPTS:
+        if prompt not in seeded_prompts:
+            conn.execute("INSERT OR IGNORE INTO drawing_prompts (text, created_at) VALUES (?, ?)", (prompt, now()))
+            conn.execute("INSERT INTO drawing_prompt_seeds (text) VALUES (?)", (prompt,))
 
     existing_count = conn.execute("SELECT COUNT(*) FROM questions").fetchone()[0]
     if existing_count == 0:
@@ -1084,7 +1143,8 @@ def drawing_token():
 
 def drawing_new_prompt(conn):
     recent = {row["prompt"] for row in conn.execute("SELECT prompt FROM drawing_rounds ORDER BY id DESC LIMIT 15")}
-    choices = [prompt for prompt in DRAWING_PROMPTS if prompt not in recent] or DRAWING_PROMPTS
+    prompts = [row["text"] for row in conn.execute("SELECT text FROM drawing_prompts")] or DRAWING_PROMPTS
+    choices = [prompt for prompt in prompts if prompt not in recent] or prompts
     return random.choice(choices)
 
 
@@ -1666,6 +1726,7 @@ def admin():
         questions = conn.execute("SELECT * FROM questions ORDER BY id DESC").fetchall()
         participants = participant_stats(conn)
         tv_html = admin_tv_html(conn)
+        prompts_html = admin_prompts_html(conn)
     body = "<h1>Host Admin</h1><form method='post' action='/admin/play-as-host'><button class='btn btn-ok' type='submit'>Play as Host (quiz, Dopewars, drawing)</button></form><a class='btn btn-ok' href='/admin/add-question'>Add Question</a><h2>Participant Drink Tokens</h2>"
     if participants:
         body += "<table class='table'><tr><th>Player</th><th>Answered</th><th>Tokens ready</th><th>Given</th><th>Progress</th><th>Action</th></tr>"
@@ -1688,9 +1749,68 @@ def admin():
         kind = "Free write" if question["is_open_text"] else "Multiple choice"
         body += f"<div class='question left'><strong>{escape(strip_internal_round_labels(question['text']))}</strong><p class='muted'>{kind} · Question {question['question_number']} · ID {question['id']}</p><div class='admin-row'><a class='btn btn-warn small' href='/admin/edit-question/{question['id']}'>Edit</a><form method='post' action='/admin/delete-question-number/{question['question_number']}' onsubmit=\"return confirm('Delete this question and all answers?');\"><button class='btn btn-del small'>Delete</button></form></div></div>"
     body += tv_html
-    body += "<h2>Drawing with Friends</h2><form method='post' action='/admin/drawing/end' onsubmit=\"return confirm('End the current drawing round?');\"><button class='btn btn-del small'>End Current Drawing Round</button></form>"
+    body += "<h2>Drawing with Friends</h2><form method='post' action='/admin/drawing/end' onsubmit=\"return confirm('End the current drawing round?');\"><button class='btn btn-del small'>End Current Drawing Round</button></form>" + prompts_html
     body += "<a class='btn btn-sec' href='/tv'>TV Screen</a><a class='btn btn-sec' href='/answers'>View Community Answers</a><a class='btn btn-sec' href='/gold-users'>View Gold Users</a><a class='btn btn-sec' href='/admin/logout'>Log Out</a><a class='btn btn-sec' href='/'>Back to Menu</a>"
     return page("Host Admin", body)
+
+
+def admin_prompts_html(conn):
+    prompts = conn.execute("SELECT id, text FROM drawing_prompts ORDER BY text COLLATE NOCASE").fetchall()
+    html = [
+        f"<h2>Drawing Prompts ({len(prompts)})</h2><p class='muted'>Each round picks one at random, skipping the last 15 used.</p>",
+        "<form method='post' action='/admin/drawing/prompts' class='admin-row'>"
+        f"<input name='text' maxlength='{DRAWING_PROMPT_MAX_LENGTH}' required placeholder='New prompt, e.g. A cat driving a tractor' style='flex:1'>"
+        "<button class='btn btn-ok small' type='submit'>Add Prompt</button></form>",
+    ]
+    for prompt in prompts:
+        html.append(
+            f"<form method='post' action='/admin/drawing/prompts/{prompt['id']}' class='admin-row'>"
+            f"<input name='text' maxlength='{DRAWING_PROMPT_MAX_LENGTH}' required value='{escape(prompt['text'])}' style='flex:1'>"
+            "<button class='btn btn-warn small' type='submit'>Save</button>"
+            f"<button class='btn btn-del small' formaction='/admin/drawing/prompts/{prompt['id']}/delete' formnovalidate onclick=\"return confirm('Delete this prompt?');\">Delete</button></form>"
+        )
+    return "".join(html)
+
+
+def clean_prompt(value):
+    return re.sub(r"\s+", " ", value or "").strip()[:DRAWING_PROMPT_MAX_LENGTH]
+
+
+@app.route("/admin/drawing/prompts", methods=["POST"])
+def admin_add_prompt():
+    denied = require_admin()
+    if denied:
+        return denied
+    text = clean_prompt(request.form.get("text"))
+    if text:
+        with closing(db_conn()) as conn:
+            conn.execute("INSERT OR IGNORE INTO drawing_prompts (text, created_at) VALUES (?, ?)", (text, now()))
+            conn.commit()
+    return redirect(url_for("admin"))
+
+
+@app.route("/admin/drawing/prompts/<int:prompt_id>", methods=["POST"])
+def admin_edit_prompt(prompt_id):
+    denied = require_admin()
+    if denied:
+        return denied
+    text = clean_prompt(request.form.get("text"))
+    if text:
+        with closing(db_conn()) as conn:
+            conn.execute("UPDATE OR IGNORE drawing_prompts SET text = ? WHERE id = ?", (text, prompt_id))
+            conn.commit()
+    return redirect(url_for("admin"))
+
+
+@app.route("/admin/drawing/prompts/<int:prompt_id>/delete", methods=["POST"])
+def admin_delete_prompt(prompt_id):
+    denied = require_admin()
+    if denied:
+        return denied
+    with closing(db_conn()) as conn:
+        conn.execute("DELETE FROM drawing_prompts WHERE id = ?", (prompt_id,))
+        conn.commit()
+    return redirect(url_for("admin"))
 
 
 @app.route("/admin/play-as-host", methods=["POST"])
