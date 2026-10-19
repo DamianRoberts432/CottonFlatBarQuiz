@@ -246,6 +246,84 @@ CHOICE_QUESTIONS = [
 ]
 
 
+FRIEND_QUESTIONS = [
+    ('What matters most in a new friend?', ['A great sense of humor', 'Loyalty', 'Shared hobbies', 'Honesty even when it hurts']),
+    ("What's one quality you look for in a friend that most people overlook?", []),
+    ('What does loyalty mean to you in a friendship?', []),
+    ('How do you prefer to show someone you care?', ['Spending time together', 'Kind words', 'Doing favors', 'Small gifts']),
+    ("What's a small gesture that makes you feel appreciated?", []),
+    ('What could a partner do that would instantly make your day?', []),
+    ("What's the biggest red flag on a first date?", ['Rude to the server', 'On their phone the whole time', 'Only talks about their ex', "Won't share the fries"]),
+    ("What's a deal-breaker for you in a relationship?", []),
+    ('What makes you trust someone?', []),
+    ("What's the best piece of relationship advice you've ever gotten?", []),
+    ('How often do you like to hear from close friends?', ['Every day', 'A few times a week', 'Once a week', 'Whenever, we pick up where we left off']),
+    ("What do you need from friends when you're having a rough week?", []),
+    ("What's a shared activity you'd love to have with a partner?", []),
+    ("What's your ideal first date?", ['Live music', 'Dinner and drinks', 'Something outdoors', 'Game night or trivia']),
+    ('What does a perfect night out with friends look like to you?', []),
+    ("What's something you've learned from a past friendship or relationship?", []),
+    ('Which matters most in a partner?', ['Ambition', 'Kindness', 'Chemistry', 'Stability']),
+    ('How do you know when someone is a real friend?', []),
+    ('What kind of humor do you click with?', []),
+    ("What's one thing you wish people asked you about more often?", []),
+    ('How do you handle a disagreement with a friend?', ['Talk it out right away', 'Cool off first, then talk', 'Let it go', 'Text it out']),
+    ('What would your friends say is your best quality as a friend?', []),
+    ('What helps you open up to someone new?', []),
+    ("What's your perfect friend group size?", ['One or two ride-or-dies', 'A tight crew of four or five', 'A big group', 'Different friends for different things']),
+    ("What's a value you won't compromise on in a partner?", []),
+    ('What does respect look like in a relationship?', []),
+    ('What keeps a friendship going for years?', ['Showing up when it counts', 'Laughing at the same dumb stuff', 'Being honest', 'Making time even when busy']),
+    ('How do you like to celebrate the people you love?', []),
+    ('What makes someone a good listener?', []),
+    ("What's a green flag that makes you want to get to know someone better?", []),
+    ('How important is it that a partner likes your music?', ['Deal-breaker', 'Pretty important', 'Nice but not needed', "I'd rather they have their own taste"]),
+    ('How much alone time do you need, even in a great relationship?', []),
+    ("What's something a friend did for you that you'll never forget?", []),
+    ('What makes someone instantly easy to talk to?', ['They ask good questions', "They're funny", "They're relaxed and genuine", 'We have something in common']),
+    ("What's the best way to make up after an argument?", []),
+    ("What do you look for in someone you'd go to a concert with?", []),
+    ('Which would you rather have?', ['A few deep friendships', 'Lots of casual friends', 'One best friend', 'A partner who is also your best friend']),
+    ('What role does music play in your friendships or relationships?', []),
+    ("What's a hobby you'd love a partner or friend to share with you?", []),
+    ('What makes a friendship feel balanced?', []),
+    ("What's the best way to meet new people?", ['Live shows and bars', 'Through friends', 'Hobbies and clubs', 'Apps']),
+    ('How do you show up for friends when they need you?', []),
+    ("What's your favorite way to spend quality time with someone?", []),
+    ('How do you feel about a friend who is always late?', ['Totally fine', 'Mildly annoyed', 'I give them a fake earlier start time', "It's a real problem"]),
+    ('What makes you feel at home with someone?', []),
+    ('What does a healthy relationship look like to you?', []),
+    ('Which trait would you most want in a wingman?', ['Confidence', 'Honesty', 'Patience', 'Knows when to leave']),
+    ("What's a quirk you find attractive in a person?", []),
+    ('What would make you and your friends become regulars somewhere?', []),
+    ("What's one thing you want to get better at in your relationships?", []),
+]
+
+VENUE_QUESTIONS = [
+    ('What type of music are you most into?', ['Country / Americana', 'Rock / Punk / Metal', 'Hip-hop / R&B', 'Electronic / Indie / Other']),
+    ('What bands or artists would you love to see booked here?', []),
+    ('Which night would you most likely come out for live music?', ['Thursday', 'Friday', 'Saturday', 'Sunday afternoon']),
+    ('What local musicians should we book more often?', []),
+    ('What genre do you think is missing from the local music scene?', []),
+    ('What kind of event would get you here most often?', ['Live bands', 'Open mic', 'Karaoke', 'Trivia or game nights']),
+    ("What's one drink you wish we had on the menu?", []),
+    ('How do you like to find out about upcoming shows?', ['Instagram / Facebook', 'Posters in the bar', 'Text or email list', 'Word of mouth']),
+    ('What would make this your go-to spot on a weeknight?', []),
+    ("What's the best show you've ever been to, and what made it great?", []),
+    ("What's a fair cover charge for a good local band?", ["Free, I'll tip the band", '$5', '$10', '$15+ for a great show']),
+    ('What themed night would you show up for?', []),
+    ('What would you most like added at the bar?', ['More craft beer', 'Signature cocktails', 'Food and snacks', 'Non-alcoholic options']),
+    ('What would make the sound or stage better for you?', []),
+    ('What snack or food would you order during a show?', []),
+    ('What time should live music start?', ['Before 8 PM', '8 PM', '9 PM', '10 PM or later']),
+    ("What's one thing we could do to make everyone feel more welcome here?", []),
+    ('Where do you like to be during a show?', ['Up front dancing', 'Bar stools near the stage', 'Tables in the back', 'Patio within earshot']),
+    ('If you could plan one event here, what would it be?', []),
+    ('What other venues do you love, and what do they do right?', []),
+]
+EXTRA_SEED_QUESTIONS = (("friends", FRIEND_QUESTIONS), ("venue", VENUE_QUESTIONS))
+
+
 def now():
     return datetime.now().isoformat(timespec="seconds")
 
@@ -372,6 +450,7 @@ def init_db():
         );
         CREATE TABLE IF NOT EXISTS drawing_prompts (id INTEGER PRIMARY KEY AUTOINCREMENT, text TEXT NOT NULL UNIQUE, created_at TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS drawing_prompt_seeds (text TEXT PRIMARY KEY);
+        CREATE TABLE IF NOT EXISTS deleted_seed_keys (seed_key TEXT PRIMARY KEY);
         CREATE TABLE IF NOT EXISTS tv_screens (key TEXT PRIMARY KEY, title TEXT NOT NULL, enabled INTEGER NOT NULL DEFAULT 1);
         CREATE TABLE IF NOT EXISTS tv_messages (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL, body TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS dopewars_scores (
@@ -418,6 +497,20 @@ def init_db():
                     strip_internal_round_labels(item["text"])[:MAX_QUESTION_LENGTH], item["is_open_text"],
                     options[0][:MAX_OPTION_LENGTH], options[1][:MAX_OPTION_LENGTH],
                     options[2][:MAX_OPTION_LENGTH], options[3][:MAX_OPTION_LENGTH], now(), item["seed_key"], item["question_number"]))
+
+    skip_keys = {row[0] for row in conn.execute("SELECT seed_key FROM deleted_seed_keys")}
+    skip_keys |= {row[0] for row in conn.execute("SELECT seed_key FROM questions WHERE seed_key IS NOT NULL")}
+    for prefix, items in EXTRA_SEED_QUESTIONS:
+        for index, (text, options) in enumerate(items, 1):
+            seed_key = f"{prefix}-{index}"
+            if seed_key in skip_keys:
+                continue
+            options = list(options) + [""] * 4
+            conn.execute("""INSERT INTO questions
+                (text, is_open_text, op1, op2, op3, op4, approved, created_at, seed_key, question_number)
+                VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?)""", (
+                    text, 0 if options[0] else 1, options[0], options[1], options[2], options[3],
+                    now(), seed_key, next_question_number(conn)))
 
     for row in conn.execute("SELECT id, text FROM questions WHERE text IS NOT NULL"):
         cleaned = strip_internal_round_labels(row["text"])
@@ -2032,12 +2125,17 @@ def reject_suggestion(suggestion_id):
     return redirect(url_for("admin"))
 
 
+def forget_seed_question(conn, question_id):
+    conn.execute("INSERT OR IGNORE INTO deleted_seed_keys (seed_key) SELECT seed_key FROM questions WHERE id = ? AND seed_key IS NOT NULL", (question_id,))
+
+
 @app.route("/admin/delete-question/<int:question_id>", methods=["POST"])
 def delete_question(question_id):
     denied = require_admin()
     if denied:
         return denied
     with closing(db_conn()) as conn:
+        forget_seed_question(conn, question_id)
         conn.execute("DELETE FROM votes WHERE question_id = ?", (question_id,))
         conn.execute("DELETE FROM text_responses WHERE question_id = ?", (question_id,))
         conn.execute("DELETE FROM participant_answers WHERE question_id = ?", (question_id,))
@@ -2056,6 +2154,7 @@ def delete_question_number(question_number):
         if question:
             if question["seed_key"] and seed_question_number(question["seed_key"]) == question["question_number"]:
                 record_deleted_seed_question_number(question["question_number"])
+            forget_seed_question(conn, question["id"])
             conn.execute("DELETE FROM votes WHERE question_id = ?", (question["id"],))
             conn.execute("DELETE FROM text_responses WHERE question_id = ?", (question["id"],))
             conn.execute("DELETE FROM participant_answers WHERE question_id = ?", (question["id"],))

@@ -673,5 +673,22 @@ class QuizProgressTestCase(unittest.TestCase):
             conn.commit()
             self.assertEqual(Quiz.drawing_new_prompt(conn), "A moose at prom")
 
+    def test_friend_and_venue_questions_are_added_once(self):
+        def keyed(prefix):
+            return [row for row in self.approved_questions() if (row["seed_key"] or "").startswith(prefix)]
+        friends, venue = keyed("friends-"), keyed("venue-")
+        self.assertEqual((len(friends), len(venue)), (50, 20))
+        self.assertIn("What bands or artists would you love to see booked here?", [row["text"] for row in venue])
+        for row in friends + venue:
+            self.assertGreater(row["question_number"], 200)
+            self.assertEqual(len(Quiz.options_for(row)), 0 if row["is_open_text"] else 4)
+        Quiz.init_db()
+        self.assertEqual(len(keyed("friends-")), 50)
+        self.make_admin()
+        self.client.post(f"/admin/delete-question-number/{friends[0]['question_number']}")
+        self.client.post(f"/admin/delete-question/{venue[0]['id']}")
+        Quiz.init_db()
+        self.assertEqual((len(keyed("friends-")), len(keyed("venue-"))), (49, 19))
+
 if __name__ == "__main__":
     unittest.main()
