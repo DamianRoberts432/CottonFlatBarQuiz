@@ -1,3 +1,4 @@
+import io
 import os
 import tempfile
 import unittest
@@ -708,6 +709,49 @@ class QuizProgressTestCase(unittest.TestCase):
             self.assertEqual(self.client.get(f"/admin?tab={tab}").status_code, 200)
         reply = self.client.post("/admin/drawing/prompts", data={"text": "Tab check"})
         self.assertTrue(reply.headers["Location"].endswith("/admin?tab=games"))
+
+    def test_ad_upload_approval_and_expiry(self):
+        png = bytes.fromhex("89504e470d0a1a0a") + b"0" * 32
+        def upload(client, name, plan, data, filename="ad.png"):
+            fields = {"business": name, "message": "Tacos $2", "contact": "Sam 555", "plan": plan, "image": (io.BytesIO(data), filename)}
+            return client.post("/advertise", data=fields, content_type="multipart/form-data").get_data(as_text=True)
+        form = self.client.get("/advertise").get_data(as_text=True)
+        for text in ("$Drob432", "$25", "$5", "2 months", "1 week"):
+            self.assertIn(text, form)
+        self.assertIn("Only PNG", upload(self.client, "Bad", "company", b"<script>alert(1)</script>", "x.png"))
+        self.assertIn("over 3 MB", upload(self.client, "Big", "company", png + b"0" * Quiz.AD_MAX_BYTES))
+        clock = [1000.0]
+        with patch.object(Quiz, "clock", lambda: clock[0]):
+            self.assertIn("Got it", upload(self.client, "Taco Shack", "company", png))
+            upload(self.client, "Happy Birthday Sam", "shoutout", png)
+            with closing(Quiz.db_conn()) as conn:
+                ids = {row["business"]: row["id"] for row in conn.execute("SELECT id, business FROM ads")}
+            self.assertEqual(sorted(ids), ["Happy Birthday Sam", "Taco Shack"])
+            def ad_titles():
+                return [b["title"] for b in self.client.get("/tv/state").get_json()["boards"] if "ad" in b]
+            self.assertEqual(ad_titles(), [])
+            self.assertEqual(self.client.get(f"/ads/{ids['Taco Shack']}/image").status_code, 404)
+            self.client.post(f"/admin/ads/{ids['Taco Shack']}/approve")
+            self.assertEqual(ad_titles(), [])
+            admin = Quiz.app.test_client()
+            self.make_admin(admin)
+            self.assertIn("Taco Shack", admin.get("/admin?tab=tv").get_data(as_text=True))
+            self.assertEqual(admin.get(f"/ads/{ids['Taco Shack']}/image").status_code, 200)
+            for name in ("Taco Shack", "Happy Birthday Sam"):
+                admin.post(f"/admin/ads/{ids[name]}/approve")
+            self.assertEqual(ad_titles(), ["Taco Shack", "Happy Birthday Sam"])
+            image = self.client.get(f"/ads/{ids['Taco Shack']}/image")
+            self.assertEqual((image.mimetype, image.headers["X-Content-Type-Options"]), ("image/png", "nosniff"))
+            clock[0] += 8 * 86400
+            self.assertEqual(ad_titles(), ["Taco Shack"])
+            clock[0] += 53 * 86400
+            self.assertEqual(ad_titles(), [])
+            self.assertEqual(self.client.get(f"/ads/{ids['Taco Shack']}/image").status_code, 404)
+            self.assertIn("Renew", admin.get("/admin?tab=tv").get_data(as_text=True))
+            admin.post(f"/admin/ads/{ids['Taco Shack']}/delete")
+            with closing(Quiz.db_conn()) as conn:
+                self.assertEqual(conn.execute("SELECT COUNT(*) FROM ads").fetchone()[0], 1)
+
 
 if __name__ == "__main__":
     unittest.main()

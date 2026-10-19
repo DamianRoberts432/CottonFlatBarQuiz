@@ -164,6 +164,20 @@ DRAWING_PROMPTS = [
     "A horse ordering a drink",
 ]
 DRAWING_PROMPT_MAX_LENGTH = 120
+CASHAPP_TAG = "$Drob432"
+AD_PLANS = {
+    "company": {"label": "Company ad", "price": "$25", "days": 60, "length": "2 months"},
+    "shoutout": {"label": "Weeklong shoutout", "price": "$5", "days": 7, "length": "1 week"},
+}
+AD_MAX_BYTES = 3 * 1024 * 1024
+AD_MAX_PENDING = 30
+AD_SIGNATURES = (
+    (bytes.fromhex("89504e470d0a1a0a"), "image/png"),
+    (bytes.fromhex("ffd8ff"), "image/jpeg"),
+    (b"GIF87a", "image/gif"),
+    (b"GIF89a", "image/gif"),
+)
+app.config["MAX_CONTENT_LENGTH"] = 5 * 1024 * 1024
 
 
 def strip_internal_round_labels(text):
@@ -452,6 +466,11 @@ def init_db():
         CREATE TABLE IF NOT EXISTS drawing_prompts (id INTEGER PRIMARY KEY AUTOINCREMENT, text TEXT NOT NULL UNIQUE, created_at TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS drawing_prompt_seeds (text TEXT PRIMARY KEY);
         CREATE TABLE IF NOT EXISTS deleted_seed_keys (seed_key TEXT PRIMARY KEY);
+        CREATE TABLE IF NOT EXISTS ads (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, business TEXT NOT NULL, message TEXT NOT NULL DEFAULT '', contact TEXT NOT NULL DEFAULT '',
+            plan TEXT NOT NULL, mime TEXT NOT NULL, image BLOB NOT NULL, status TEXT NOT NULL DEFAULT 'pending',
+            created_at REAL NOT NULL, approved_at REAL, expires_at REAL
+        );
         CREATE TABLE IF NOT EXISTS tv_screens (key TEXT PRIMARY KEY, title TEXT NOT NULL, enabled INTEGER NOT NULL DEFAULT 1);
         CREATE TABLE IF NOT EXISTS tv_messages (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL, body TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS dopewars_scores (
@@ -974,6 +993,7 @@ def menu():
         "<a class='btn btn-sec' href='/gold-users'>🥇 Gold Users</a>",
         "<a class='btn btn-sec' href='/games/dopewars'>🕹 Games</a>",
         "<a class='btn btn-sec' href='/games/drawing'>🎨 Drawing with Friends</a>",
+        "<a class='btn btn-sec' href='/advertise'>📣 Advertise on the TV</a>",
         "<a class='btn btn-sec' href='/admin'>🛠 Admin</a>",
         "<div class='question left'><h2>🕹 Dopewars</h2><p>Classic text-based street trading across NYC.</p><a class='btn btn-ok' href='/games/dopewars'>Play Dopewars</a><h3>High Scores</h3>",
     ]
@@ -999,6 +1019,7 @@ table{border-collapse:collapse;font-size:4vh;min-width:60vw}td,th{padding:1.2vh 
 th{color:#a7b0c0;font-size:2.8vh}td.score{color:#80efad;font-weight:bold;text-align:right}tr.first td{color:#ffd54a}
 .timer{font-size:22vh;font-weight:bold;color:#ffd54a;line-height:1}.art{max-height:62vh;max-width:90vw;border-radius:12px;background:#fff;margin:1vh 0}
 .chips{display:flex;flex-wrap:wrap;gap:1.5vh;justify-content:center;margin:3vh 0}.chip{background:#6a3fb5;padding:1.2vh 2.5vw;border-radius:999px;font-size:3.5vh}
+.adimg{max-height:62vh;max-width:90vw;border-radius:12px}
 .grid{display:flex;flex-wrap:wrap;gap:3vh;justify-content:center;margin:2vh 0}.cell{position:relative}.cell img{height:30vh;max-width:28vw;background:#fff;border-radius:10px}.cell img.win{height:55vh;max-width:80vw}.num{position:absolute;top:-1.5vh;left:-1.5vh;background:#ffd54a;color:#111;font-weight:bold;font-size:5vh;border-radius:999px;padding:0 2vh}
 </style></head><body><div id='app'><h1>🍺 Cotton Flat Bar Quiz</h1></div>
 <script>
@@ -1007,10 +1028,11 @@ function esc(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;',
 const BOARD_MS = 12000;
 function fmtScore(b, v){ return (b.unit=='$' ? '$' : '') + Number(v).toLocaleString(); }
 function renderScores(st){
-  const boards = st.boards.filter(b=>b.rows.length || b.message);
+  const boards = st.boards.filter(b=>b.rows.length || b.message || b.ad);
   if(!boards.length) return "<h1>Cotton Flat Bar Quiz</h1><p class='muted'>No scores yet. Join the Wi-Fi <b>Cotton Flat Bar Quiz</b> and play!</p>";
   const pick = Math.floor(Date.now()/BOARD_MS) % boards.length;
   const b = boards[pick];
+  if(b.ad) return `<h1>${esc(b.title)}</h1><img class='adimg' src='${esc(b.ad)}'>${b.caption ? `<p style='font-size:4vh;margin:2vh 0 0'>${esc(b.caption)}</p>` : ''}<p class='muted'>Advertise here: Menu &gt; Advertise on the TV &middot; ${pick+1}/${boards.length}</p>`;
   if(b.message) return `<h1>${esc(b.title)}</h1><p style='font-size:5vh;white-space:pre-wrap'>${esc(b.message)}</p><p class='muted'>${pick+1}/${boards.length}</p>`;
   let h = `<h1>${esc(b.title)}</h1><table><tr><th>#</th><th>Player</th><th style='text-align:right'>${esc(b.label)}</th></tr>`;
   b.rows.forEach((r,i)=>{h += `<tr class='${i==0?"first":""}'><td>${i+1}</td><td>${esc(r.name)}</td><td class='score'>${fmtScore(b, r.score)}</td></tr>`;});
@@ -1085,7 +1107,108 @@ def tv_boards(conn, include_hidden=False):
             boards.append(board)
     for message in conn.execute("SELECT * FROM tv_messages ORDER BY id"):
         boards.append({"key": f"message{message['id']}", "id": message["id"], "title": message["title"], "message": message["body"], "rows": [], "enabled": True})
+    for ad in live_ads(conn):
+        boards.append({"key": f"ad{ad['id']}", "id": ad["id"], "title": ad["business"], "ad": f"/ads/{ad['id']}/image", "caption": ad["message"], "rows": [], "enabled": True})
     return boards
+
+
+def ad_image_type(data):
+    for signature, mime in AD_SIGNATURES:
+        if data.startswith(signature):
+            return mime
+    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return "image/webp"
+    return None
+
+
+def clean_line(value, limit):
+    return " ".join((value or "").split())[:limit]
+
+
+def live_ads(conn):
+    return conn.execute(
+        "SELECT id, business, message FROM ads WHERE status = 'approved' AND expires_at > ? ORDER BY approved_at, id",
+        (clock(),),
+    ).fetchall()
+
+
+def ad_form(error="", notice=""):
+    prices = "".join(f"<p style='margin:0'><strong>{plan['price']}</strong> {plan['label']}: on the TV for {plan['length']}</p>" for plan in AD_PLANS.values())
+    plans = "".join(
+        f"<label class='choice'><input type='radio' name='plan' value='{key}'{' checked' if key == 'shoutout' else ''}> {plan['price']} {plan['label']} ({plan['length']})</label>"
+        for key, plan in AD_PLANS.items()
+    )
+    return page("Advertise", (
+        f"<h1>📣 Advertise on the TV</h1>{error}{notice}"
+        f"<div class='question left'><h2 style='margin:0'>Prices</h2>{prices}"
+        "<ol style='margin:0;padding-left:20px;line-height:1.6'><li>Pick a plan and upload your picture below.</li>"
+        f"<li>Send the price on CashApp to <strong style='font-size:20px;color:#80efad'>{CASHAPP_TAG}</strong> with your name in the note.</li>"
+        "<li>Once the host sees your payment, your ad joins the TV rotation.</li></ol></div>"
+        "<form method='post' enctype='multipart/form-data' class='form'>"
+        "<label>Business or shoutout name</label><input name='business' maxlength='60' required placeholder='e.g. Main Street Tacos or Happy Birthday Sam'>"
+        "<label>Caption under your picture (optional)</label><input name='message' maxlength='120' placeholder='e.g. $2 tacos every Tuesday'>"
+        "<label>Your name, CashApp name and phone or email (only the host sees this)</label><input name='contact' maxlength='100' required>"
+        f"<label>Plan</label>{plans}"
+        "<label>Picture: PNG, JPG, GIF or WebP, up to 3 MB. Wide pictures look best.</label>"
+        "<input type='file' name='image' accept='image/png,image/jpeg,image/gif,image/webp' required>"
+        "<button class='btn btn-ok' type='submit'>Send for Approval</button></form><a class='btn btn-sec' href='/'>Back to Menu</a>"
+    ))
+
+
+@app.route("/advertise", methods=["GET", "POST"])
+def advertise():
+    if request.method == "GET":
+        return ad_form()
+    business = clean_line(request.form.get("business"), 60)
+    message = clean_line(request.form.get("message"), 120)
+    contact = clean_line(request.form.get("contact"), 100)
+    plan = request.form.get("plan", "")
+    upload = request.files.get("image")
+    data = upload.read(AD_MAX_BYTES + 1) if upload else b""
+    mime = ad_image_type(data)
+    if not business or not contact or plan not in AD_PLANS:
+        error = "Fill in your name, contact details and plan."
+    elif not data:
+        error = "Choose a picture to upload."
+    elif len(data) > AD_MAX_BYTES:
+        error = "That picture is over 3 MB. Try a smaller one."
+    elif not mime:
+        error = "Only PNG, JPG, GIF or WebP pictures can be uploaded."
+    else:
+        with closing(db_conn()) as conn:
+            if conn.execute("SELECT COUNT(*) FROM ads WHERE status = 'pending'").fetchone()[0] >= AD_MAX_PENDING:
+                error = "Too many ads are waiting for the host right now. Please try again later."
+            else:
+                conn.execute(
+                    "INSERT INTO ads (business, message, contact, plan, mime, image, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (business, message, contact, plan, mime, sqlite3.Binary(data), clock()),
+                )
+                conn.commit()
+                price = AD_PLANS[plan]["price"]
+                return ad_form(notice=(
+                    f"<div class='notice'>Got it! Now send {price} on CashApp to <strong>{CASHAPP_TAG}</strong> with "
+                    f"&ldquo;{escape(business)}&rdquo; in the note. Your ad goes on the TV once the host confirms payment.</div>"
+                ))
+    return ad_form(error=f"<div class='error'>{escape(error)}</div>")
+
+
+@app.errorhandler(413)
+def upload_too_large(_error):
+    return ad_form(error="<div class='error'>That upload is too big. Pictures must be under 3 MB.</div>"), 413
+
+
+@app.route("/ads/<int:ad_id>/image")
+def ad_image(ad_id):
+    with closing(db_conn()) as conn:
+        row = conn.execute("SELECT mime, image, status, expires_at FROM ads WHERE id = ?", (ad_id,)).fetchone()
+    live = row is not None and row["status"] == "approved" and (row["expires_at"] or 0) > clock()
+    if not row or not (live or admin_required()):
+        return Response("Not found", status=404, mimetype="text/plain")
+    response = Response(bytes(row["image"]), mimetype=row["mime"])
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["Content-Security-Policy"] = "default-src 'none'"
+    response.headers["Cache-Control"] = "private, max-age=300"
+    return response
 
 
 @app.route("/tv")
@@ -1775,6 +1898,8 @@ def submit_question():
 def admin_tv_html(conn):
     html = ["<h2>TV Screens</h2><p class='muted'>The TV rotates these every 12 seconds. Score boards with nobody on them are skipped.</p>"]
     for board in tv_boards(conn, include_hidden=True):
+        if "ad" in board:
+            continue
         if "message" in board:
             html.append(
                 f"<div class='question left'><strong>{escape(board['title'])}</strong><p>{escape(board['message'])}</p>"
@@ -1890,12 +2015,12 @@ def admin_games_html(conn):
 
 
 ADMIN_QUESTIONS_PER_PAGE = 25
-ADMIN_TAB_LABELS = {"players": "Players & Tokens", "questions": "Questions", "submissions": "Submissions", "tv": "TV Screens", "games": "Games & Prompts"}
+ADMIN_TAB_LABELS = {"players": "Players & Tokens", "questions": "Questions", "submissions": "Submissions", "tv": "TV Screens & Ads", "games": "Games & Prompts"}
 ADMIN_TAB_RENDERERS = {
     "players": admin_players_html,
     "questions": admin_questions_html,
     "submissions": admin_submissions_html,
-    "tv": admin_tv_html,
+    "tv": lambda conn: admin_ads_html(conn) + admin_tv_html(conn),
     "games": admin_games_html,
 }
 
@@ -1991,6 +2116,59 @@ def admin_delete_prompt(prompt_id):
         conn.execute("DELETE FROM drawing_prompts WHERE id = ?", (prompt_id,))
         conn.commit()
     return admin_redirect("games")
+
+
+def admin_ads_html(conn):
+    current = clock()
+    ads = conn.execute("SELECT id, business, message, contact, plan, status, created_at, expires_at FROM ads ORDER BY id DESC").fetchall()
+    day = lambda stamp: datetime.fromtimestamp(stamp or 0).strftime("%b %d, %Y")
+    def button(ad, action, label, style):
+        confirm = "" if action == "approve" else " onsubmit='return confirm(&quot;Delete this ad?&quot;);'"
+        return f"<form method='post' action='/admin/ads/{ad['id']}/{action}'{confirm}><button class='btn {style} small'>{label}</button></form>"
+    def card(ad, note, buttons):
+        plan = AD_PLANS.get(ad["plan"], AD_PLANS["shoutout"])
+        caption = f"<p style='margin:0'>{escape(ad['message'])}</p>" if ad["message"] else ""
+        return (
+            f"<div class='question left'><img src='/ads/{ad['id']}/image' alt='' style='max-width:100%;max-height:200px;border-radius:8px;align-self:flex-start'>"
+            f"<strong>{escape(ad['business'])}</strong>{caption}<p class='muted' style='margin:0'>{plan['label']} · {plan['price']} · {note}<br>Contact: {escape(ad['contact'])}</p>"
+            f"<div class='admin-row'>{buttons}</div></div>"
+        )
+    groups = [
+        ("Waiting for approval", [ad for ad in ads if ad["status"] != "approved"], lambda ad: card(ad, f"sent {day(ad['created_at'])}", button(ad, "approve", "Paid: Approve", "btn-ok") + button(ad, "delete", "Reject", "btn-del"))),
+        ("On the TV now", [ad for ad in ads if ad["status"] == "approved" and ad["expires_at"] > current], lambda ad: card(ad, f"until {day(ad['expires_at'])}", button(ad, "delete", "Remove", "btn-del"))),
+        ("Expired", [ad for ad in ads if ad["status"] == "approved" and ad["expires_at"] <= current], lambda ad: card(ad, f"ended {day(ad['expires_at'])}", button(ad, "approve", "Renew", "btn-ok") + button(ad, "delete", "Delete", "btn-del"))),
+    ]
+    html = [f"<h2>TV Ads</h2><p class='muted'>Patrons upload at <a href='/advertise'>Advertise on the TV</a>. Check your CashApp ({CASHAPP_TAG}) for their payment before approving: the app can't see payments.</p>"]
+    for title, items, render in groups:
+        if items or title != "Expired":
+            html.append(f"<h3>{title} ({len(items)})</h3>" + ("".join(render(ad) for ad in items) or "<p class='muted'>None.</p>"))
+    return "".join(html)
+
+
+@app.route("/admin/ads/<int:ad_id>/approve", methods=["POST"])
+def admin_approve_ad(ad_id):
+    denied = require_admin()
+    if denied:
+        return denied
+    with closing(db_conn()) as conn:
+        ad = conn.execute("SELECT plan FROM ads WHERE id = ?", (ad_id,)).fetchone()
+        if ad:
+            current = clock()
+            days = AD_PLANS.get(ad["plan"], AD_PLANS["shoutout"])["days"]
+            conn.execute("UPDATE ads SET status = 'approved', approved_at = ?, expires_at = ? WHERE id = ?", (current, current + days * 86400, ad_id))
+            conn.commit()
+    return admin_redirect("tv")
+
+
+@app.route("/admin/ads/<int:ad_id>/delete", methods=["POST"])
+def admin_delete_ad(ad_id):
+    denied = require_admin()
+    if denied:
+        return denied
+    with closing(db_conn()) as conn:
+        conn.execute("DELETE FROM ads WHERE id = ?", (ad_id,))
+        conn.commit()
+    return admin_redirect("tv")
 
 
 @app.route("/admin/play-as-host", methods=["POST"])
