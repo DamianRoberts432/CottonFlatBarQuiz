@@ -704,6 +704,35 @@ class QuizProgressTestCase(unittest.TestCase):
             left = [row["text"] for row in conn.execute("SELECT text FROM drawing_prompt_suggestions")]
         self.assertEqual(len(left), 3)
 
+    def test_admin_gives_tokens_and_deletes_players(self):
+        old = Quiz.app.test_client()
+        old.post("/login", data={"name": "Forgetful", "pin": "1111"})
+        self.client.post("/login", data={"name": "Forgetful Again", "pin": "2222"})
+        with closing(Quiz.db_conn()) as conn:
+            ids = {row["name"]: row["id"] for row in conn.execute("SELECT id, name FROM participants")}
+            conn.execute("INSERT INTO dopewars_scores (participant_id, top_score, achieved_at, updated_at) VALUES (?, 500, ?, ?)", (ids["Forgetful"], Quiz.now(), Quiz.now()))
+            conn.execute("INSERT INTO drink_tokens (participant_id, milestone, created_at) VALUES (?, ?, ?)", (ids["Forgetful Again"], Quiz.TOKEN_MILESTONE, Quiz.now()))
+            conn.commit()
+        def ready(name):
+            with closing(Quiz.db_conn()) as conn:
+                return next(p["unredeemed"] for p in Quiz.participant_stats(conn) if p["name"] == name)
+        self.client.post(f"/admin/players/{ids['Forgetful Again']}/tokens", data={"count": "3"})
+        self.client.post(f"/admin/players/{ids['Forgetful']}/delete")
+        self.assertEqual(ready("Forgetful Again"), 1)
+        admin = self.make_admin(Quiz.app.test_client())
+        self.assertIn("Give Tokens", admin.get("/admin?tab=players").get_data(as_text=True))
+        admin.post(f"/admin/players/{ids['Forgetful Again']}/tokens", data={"count": "3"})
+        admin.post(f"/admin/players/{ids['Forgetful Again']}/tokens", data={"count": "99"})
+        self.assertEqual(ready("Forgetful Again"), 14)
+        admin.get(f"/admin/redeem-token/{ids['Forgetful Again']}")
+        self.assertEqual(ready("Forgetful Again"), 13)
+        admin.post(f"/admin/players/{ids['Forgetful']}/delete")
+        with closing(Quiz.db_conn()) as conn:
+            self.assertIsNone(conn.execute("SELECT 1 FROM participants WHERE id = ?", (ids["Forgetful"],)).fetchone())
+            self.assertIsNone(conn.execute("SELECT 1 FROM dopewars_scores WHERE participant_id = ?", (ids["Forgetful"],)).fetchone())
+        self.assertNotIn("Forgetful<", admin.get("/admin?tab=players").get_data(as_text=True))
+        self.assertIn("/login", old.post("/games/drawing/join").headers["Location"])
+
     def test_friend_and_venue_questions_are_added_once(self):
         def keyed(prefix):
             return [row for row in self.approved_questions() if (row["seed_key"] or "").startswith(prefix)]

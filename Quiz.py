@@ -1983,12 +1983,12 @@ def admin_players_html(conn):
     if not participants:
         return "<h2>Players & Drink Tokens</h2><p class='muted'>No players yet.</p>"
     body = (
-        "<h2>Players & Drink Tokens</h2><p class='muted'>Redeem a token when a player shows you their screen. Rename fixes rude or duplicate names.</p>"
+        "<h2>Players & Drink Tokens</h2><p class='muted'>Redeem a token when a player shows you their screen. Rename fixes rude or duplicate names. Give Tokens adds drink tokens by hand, e.g. when someone forgot their PIN and signed up again. Delete Player removes a name for good.</p>"
         "<div style='overflow-x:auto'><table class='table'><tr><th>Player</th><th>Answered</th><th>Tokens ready</th><th>Given</th><th>Progress</th><th>Action</th></tr>"
     )
     for participant in participants:
         progress = participant["answered"] % TOKEN_MILESTONE
-        body += f"<tr><td>{escape(participant['name'])}</td><td>{participant['answered']}</td><td>{participant['unredeemed']}</td><td>{participant['redeemed']}</td><td>{progress}/{TOKEN_MILESTONE}</td><td><a class='btn btn-ok small' href='/admin/redeem-token/{participant['id']}'>Redeem</a><form method='post' action='/admin/rename/{participant['id']}' class='admin-row'><input name='name' maxlength='{PLAYER_NAME_MAX_LENGTH}' required placeholder='New name' style='width:auto'><button class='btn btn-warn small'>Rename</button></form></td></tr>"
+        body += f"<tr><td>{escape(participant['name'])}</td><td>{participant['answered']}</td><td>{participant['unredeemed']}</td><td>{participant['redeemed']}</td><td>{progress}/{TOKEN_MILESTONE}</td><td><a class='btn btn-ok small' href='/admin/redeem-token/{participant['id']}'>Redeem</a><form method='post' action='/admin/rename/{participant['id']}' class='admin-row'><input name='name' maxlength='{PLAYER_NAME_MAX_LENGTH}' required placeholder='New name' style='width:auto'><button class='btn btn-warn small'>Rename</button></form><form method='post' action='/admin/players/{participant['id']}/tokens' class='admin-row'><input type='number' name='count' min='1' max='10' value='1' style='width:70px'><button class='btn btn-ok small'>Give Tokens</button></form><form method='post' action='/admin/players/{participant['id']}/delete' onsubmit=\"return confirm('Delete {escape(participant['name'])}? Their tokens, quiz progress and scores are removed too.');\"><button class='btn btn-del small'>Delete Player</button></form></td></tr>"
     return body + "</table></div>"
 
 
@@ -2285,6 +2285,34 @@ def admin_rename(participant_id):
             conn.execute("UPDATE participants SET name = ?, name_key = ? WHERE id = ?", (name, name.casefold(), participant_id))
             conn.execute("UPDATE drawing_players SET nickname = ? WHERE participant_id = ?", (name, participant_id))
             conn.commit()
+    return admin_redirect("players")
+
+
+@app.route("/admin/players/<int:participant_id>/tokens", methods=["POST"])
+def admin_give_tokens(participant_id):
+    denied = require_admin()
+    if denied:
+        return denied
+    count = min(max(parse_positive_int(request.form.get("count")) or 1, 1), 10)
+    with closing(db_conn()) as conn:
+        if conn.execute("SELECT 1 FROM participants WHERE id = ?", (participant_id,)).fetchone():
+            lowest = conn.execute("SELECT MIN(0, COALESCE(MIN(milestone), 0)) FROM drink_tokens WHERE participant_id = ?", (participant_id,)).fetchone()[0]
+            for step in range(1, count + 1):
+                conn.execute("INSERT INTO drink_tokens (participant_id, milestone, created_at) VALUES (?, ?, ?)", (participant_id, lowest - step, now()))
+            conn.commit()
+    return admin_redirect("players")
+
+
+@app.route("/admin/players/<int:participant_id>/delete", methods=["POST"])
+def admin_delete_player(participant_id):
+    denied = require_admin()
+    if denied:
+        return denied
+    with closing(db_conn()) as conn:
+        conn.execute("DELETE FROM dopewars_scores WHERE participant_id = ?", (participant_id,))
+        conn.execute("DELETE FROM drawing_players WHERE participant_id = ?", (participant_id,))
+        conn.execute("DELETE FROM participants WHERE id = ?", (participant_id,))
+        conn.commit()
     return admin_redirect("players")
 
 
