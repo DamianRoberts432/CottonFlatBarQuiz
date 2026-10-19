@@ -84,7 +84,8 @@ sudo systemctl restart cotton-flat-quiz.service
 - `/games/dopewars` — text-based Dopewars game
 - `/games/drawing` — Drawing with Friends
 - `/tv` — full-screen TV display (Dopewars high scores, or the drawing game while a round runs)
-- `/admin` — host administration
+- `/admin` — host administration, split into tabs: Players & Tokens, Questions (search, 25 per page), Submissions, TV Screens & Ads, Games & Prompts
+- `/advertise` — patrons upload an ad picture for the TV (shows CashApp $Drob432 and prices)
 
 ## Wi-Fi hotspot (Pi, no ESP32)
 
@@ -118,7 +119,7 @@ Players trade across NYC locations with day-by-day price changes, travel events,
 
 ### Drawing with Friends
 
-`/games/drawing`: sign in with your name and PIN and tap **Join the Game**. Any player at the table taps **Start Round**: everyone gets the same random prompt, 10 seconds to get ready and 90 seconds to draw (drawings auto-submit). The TV and phones then show the drawings numbered, and everyone at the table votes on their phone for a favourite that isn't their own; voting closes when everyone has voted or after 45 seconds. The drawing with the most votes earns its artist 1 point (ties all score). People who join while a round is running play from the next round, and each new player resets everyone's score to 0. The admin page has **End Current Drawing Round** for stuck rounds. Only the last 10 rounds' drawings are kept in `quiz.db`.
+`/games/drawing`: sign in with your name and PIN and tap **Join the Game**. Any player at the table taps **Start Round**: everyone gets the same random prompt, 10 seconds to get ready and 90 seconds to draw (drawings auto-submit). The TV and phones then show the drawings numbered, and everyone at the table votes on their phone for a favourite that isn't their own; voting closes when everyone has voted or after 45 seconds. The drawing with the most votes earns its artist 1 point (ties all score). People who join while a round is running play from the next round, and each new player resets everyone's score to 0. **Admin > Games & Prompts** has **End Current Drawing Round** for stuck rounds and the prompt list, where the host can add, edit and delete prompts. Only the last 10 rounds' drawings are kept in `quiz.db`.
 
 ## TV display
 
@@ -130,7 +131,7 @@ chromium-browser --app=http://127.0.0.1:5000/tv --start-maximized &
 
 On newer Raspberry Pi OS the browser command may be `chromium` instead of `chromium-browser`. To stop it opening at login: `rm ~/.config/autostart/quiz-tv.desktop`.
 
-The TV rotates Dopewars high scores, Drawing with Friends scores and MVPs (most visits) every 12 seconds, and switches to the drawing game during a round. **Admin > TV Screens** can rename, hide or clear each board, remove single Dopewars scores, and add message screens. **Play as Host** on the admin page lets the host take the quiz and play the games, and the player table has **Rename** for fixing names.
+The TV rotates Dopewars high scores, Drawing with Friends scores and MVPs (most visits) every 12 seconds, and switches to the drawing game during a round. **Admin > TV Screens & Ads** can rename, hide or clear each board, remove single Dopewars scores, and add message screens. Ads uploaded at `/advertise` wait there until the host checks CashApp for payment and taps **Paid: Approve**. A $25 company ad then stays on the TV for 2 months, a $5 shoutout for 1 week, and each one drops off by itself when its time is up. Ad pictures (PNG, JPG, GIF or WebP, up to 3 MB) are stored in `quiz.db`, so they survive updates. **Play as Host** on the admin page lets the host take the quiz and play the games, and the player table has **Rename** for fixing names.
 
 ## ESP32 secrets
 

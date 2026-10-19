@@ -3,6 +3,7 @@ from collections import Counter
 from contextlib import closing
 from datetime import datetime
 from html import escape
+from urllib.parse import quote
 import json
 import math
 import os
@@ -111,7 +112,72 @@ DRAWING_PROMPTS = [
     "A pig with a fancy mustache",
     "A UFO abducting a pickup truck",
     "A mermaid at a car wash",
+    "A bull riding a mechanical cowboy",
+    "A banjo with stage fright",
+    "The jukebox's worst nightmare",
+    "Your truck if it could dance",
+    "A possum working the door",
+    "A tumbleweed looking for love",
+    "A beaver building a beer fountain",
+    "The band's tour van after 30 days",
+    "A guitar that only plays sad songs",
+    "A cactus at a pool party",
+    "Your best friend as a superhero",
+    "A cowboy boot full of surprises",
+    "The world's smallest rodeo",
+    "A hot dog running a marathon",
+    "A lizard singing the blues",
+    "Darts thrown by a toddler",
+    "A rattlesnake playing maracas",
+    "The last call stampede",
+    "A haunted pool table",
+    "A coyote howling karaoke",
+    "An astronaut at a honky-tonk",
+    "A buffalo in a tutu",
+    "The perfect bar snack",
+    "A taco riding a skateboard",
+    "A rock star's pet goldfish",
+    "A roadrunner at a speed trap",
+    "A fiddle on fire",
+    "Your dream tattoo",
+    "A bear trying to open a beer",
+    "A disco ball at a funeral",
+    "A sloth DJ",
+    "A mosquito the size of a pickup",
+    "The bartender's secret recipe",
+    "A heart wearing cowboy boots",
+    "A llama at a mosh pit",
+    "A dog walking its human",
+    "The moon at last call",
+    "A drum kit made of pots and pans",
+    "Two friends stuck in an elevator",
+    "Your first concert",
+    "A chili pepper that can't handle spice",
+    "A cowgirl lassoing a UFO",
+    "A pizza delivered by eagle",
+    "An owl hosting trivia night",
+    "A tornado that only takes socks",
+    "Your spirit animal at a bar",
+    "A beer bottle in love with a lime",
+    "A jalapeno in a hot tub",
+    "A ghost who wants a selfie",
+    "A horse ordering a drink",
 ]
+DRAWING_PROMPT_MAX_LENGTH = 120
+CASHAPP_TAG = "$Drob432"
+AD_PLANS = {
+    "company": {"label": "Company ad", "price": "$25", "days": 60, "length": "2 months"},
+    "shoutout": {"label": "Weeklong shoutout", "price": "$5", "days": 7, "length": "1 week"},
+}
+AD_MAX_BYTES = 3 * 1024 * 1024
+AD_MAX_PENDING = 30
+AD_SIGNATURES = (
+    (bytes.fromhex("89504e470d0a1a0a"), "image/png"),
+    (bytes.fromhex("ffd8ff"), "image/jpeg"),
+    (b"GIF87a", "image/gif"),
+    (b"GIF89a", "image/gif"),
+)
+app.config["MAX_CONTENT_LENGTH"] = 5 * 1024 * 1024
 
 
 def strip_internal_round_labels(text):
@@ -193,6 +259,84 @@ CHOICE_QUESTIONS = [
     ("What is the decoy effect?", ["A third option makes one of two original options look better", "A product disappears from a shelf", "A magician distracts a crowd", "A friend changes the subject"]),
     ("Which choice is most clearly an achieved status?", ["Age", "A degree earned through study", "Birth order", "Eye color"]),
 ]
+
+
+FRIEND_QUESTIONS = [
+    ('What matters most in a new friend?', ['A great sense of humor', 'Loyalty', 'Shared hobbies', 'Honesty even when it hurts']),
+    ("What's one quality you look for in a friend that most people overlook?", []),
+    ('What does loyalty mean to you in a friendship?', []),
+    ('How do you prefer to show someone you care?', ['Spending time together', 'Kind words', 'Doing favors', 'Small gifts']),
+    ("What's a small gesture that makes you feel appreciated?", []),
+    ('What could a partner do that would instantly make your day?', []),
+    ("What's the biggest red flag on a first date?", ['Rude to the server', 'On their phone the whole time', 'Only talks about their ex', "Won't share the fries"]),
+    ("What's a deal-breaker for you in a relationship?", []),
+    ('What makes you trust someone?', []),
+    ("What's the best piece of relationship advice you've ever gotten?", []),
+    ('How often do you like to hear from close friends?', ['Every day', 'A few times a week', 'Once a week', 'Whenever, we pick up where we left off']),
+    ("What do you need from friends when you're having a rough week?", []),
+    ("What's a shared activity you'd love to have with a partner?", []),
+    ("What's your ideal first date?", ['Live music', 'Dinner and drinks', 'Something outdoors', 'Game night or trivia']),
+    ('What does a perfect night out with friends look like to you?', []),
+    ("What's something you've learned from a past friendship or relationship?", []),
+    ('Which matters most in a partner?', ['Ambition', 'Kindness', 'Chemistry', 'Stability']),
+    ('How do you know when someone is a real friend?', []),
+    ('What kind of humor do you click with?', []),
+    ("What's one thing you wish people asked you about more often?", []),
+    ('How do you handle a disagreement with a friend?', ['Talk it out right away', 'Cool off first, then talk', 'Let it go', 'Text it out']),
+    ('What would your friends say is your best quality as a friend?', []),
+    ('What helps you open up to someone new?', []),
+    ("What's your perfect friend group size?", ['One or two ride-or-dies', 'A tight crew of four or five', 'A big group', 'Different friends for different things']),
+    ("What's a value you won't compromise on in a partner?", []),
+    ('What does respect look like in a relationship?', []),
+    ('What keeps a friendship going for years?', ['Showing up when it counts', 'Laughing at the same dumb stuff', 'Being honest', 'Making time even when busy']),
+    ('How do you like to celebrate the people you love?', []),
+    ('What makes someone a good listener?', []),
+    ("What's a green flag that makes you want to get to know someone better?", []),
+    ('How important is it that a partner likes your music?', ['Deal-breaker', 'Pretty important', 'Nice but not needed', "I'd rather they have their own taste"]),
+    ('How much alone time do you need, even in a great relationship?', []),
+    ("What's something a friend did for you that you'll never forget?", []),
+    ('What makes someone instantly easy to talk to?', ['They ask good questions', "They're funny", "They're relaxed and genuine", 'We have something in common']),
+    ("What's the best way to make up after an argument?", []),
+    ("What do you look for in someone you'd go to a concert with?", []),
+    ('Which would you rather have?', ['A few deep friendships', 'Lots of casual friends', 'One best friend', 'A partner who is also your best friend']),
+    ('What role does music play in your friendships or relationships?', []),
+    ("What's a hobby you'd love a partner or friend to share with you?", []),
+    ('What makes a friendship feel balanced?', []),
+    ("What's the best way to meet new people?", ['Live shows and bars', 'Through friends', 'Hobbies and clubs', 'Apps']),
+    ('How do you show up for friends when they need you?', []),
+    ("What's your favorite way to spend quality time with someone?", []),
+    ('How do you feel about a friend who is always late?', ['Totally fine', 'Mildly annoyed', 'I give them a fake earlier start time', "It's a real problem"]),
+    ('What makes you feel at home with someone?', []),
+    ('What does a healthy relationship look like to you?', []),
+    ('Which trait would you most want in a wingman?', ['Confidence', 'Honesty', 'Patience', 'Knows when to leave']),
+    ("What's a quirk you find attractive in a person?", []),
+    ('What would make you and your friends become regulars somewhere?', []),
+    ("What's one thing you want to get better at in your relationships?", []),
+]
+
+VENUE_QUESTIONS = [
+    ('What type of music are you most into?', ['Country / Americana', 'Rock / Punk / Metal', 'Hip-hop / R&B', 'Electronic / Indie / Other']),
+    ('What bands or artists would you love to see booked here?', []),
+    ('Which night would you most likely come out for live music?', ['Thursday', 'Friday', 'Saturday', 'Sunday afternoon']),
+    ('What local musicians should we book more often?', []),
+    ('What genre do you think is missing from the local music scene?', []),
+    ('What kind of event would get you here most often?', ['Live bands', 'Open mic', 'Karaoke', 'Trivia or game nights']),
+    ("What's one drink you wish we had on the menu?", []),
+    ('How do you like to find out about upcoming shows?', ['Instagram / Facebook', 'Posters in the bar', 'Text or email list', 'Word of mouth']),
+    ('What would make this your go-to spot on a weeknight?', []),
+    ("What's the best show you've ever been to, and what made it great?", []),
+    ("What's a fair cover charge for a good local band?", ["Free, I'll tip the band", '$5', '$10', '$15+ for a great show']),
+    ('What themed night would you show up for?', []),
+    ('What would you most like added at the bar?', ['More craft beer', 'Signature cocktails', 'Food and snacks', 'Non-alcoholic options']),
+    ('What would make the sound or stage better for you?', []),
+    ('What snack or food would you order during a show?', []),
+    ('What time should live music start?', ['Before 8 PM', '8 PM', '9 PM', '10 PM or later']),
+    ("What's one thing we could do to make everyone feel more welcome here?", []),
+    ('Where do you like to be during a show?', ['Up front dancing', 'Bar stools near the stage', 'Tables in the back', 'Patio within earshot']),
+    ('If you could plan one event here, what would it be?', []),
+    ('What other venues do you love, and what do they do right?', []),
+]
+EXTRA_SEED_QUESTIONS = (("friends", FRIEND_QUESTIONS), ("venue", VENUE_QUESTIONS))
 
 
 def now():
@@ -319,6 +463,14 @@ def init_db():
             round_id INTEGER NOT NULL, voter_token TEXT NOT NULL, entry_id INTEGER NOT NULL, voted_at REAL NOT NULL,
             PRIMARY KEY(round_id, voter_token)
         );
+        CREATE TABLE IF NOT EXISTS drawing_prompts (id INTEGER PRIMARY KEY AUTOINCREMENT, text TEXT NOT NULL UNIQUE, created_at TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS drawing_prompt_seeds (text TEXT PRIMARY KEY);
+        CREATE TABLE IF NOT EXISTS deleted_seed_keys (seed_key TEXT PRIMARY KEY);
+        CREATE TABLE IF NOT EXISTS ads (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, business TEXT NOT NULL, message TEXT NOT NULL DEFAULT '', contact TEXT NOT NULL DEFAULT '',
+            plan TEXT NOT NULL, mime TEXT NOT NULL, image BLOB NOT NULL, status TEXT NOT NULL DEFAULT 'pending',
+            created_at REAL NOT NULL, approved_at REAL, expires_at REAL
+        );
         CREATE TABLE IF NOT EXISTS tv_screens (key TEXT PRIMARY KEY, title TEXT NOT NULL, enabled INTEGER NOT NULL DEFAULT 1);
         CREATE TABLE IF NOT EXISTS tv_messages (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL, body TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS dopewars_scores (
@@ -349,6 +501,12 @@ def init_db():
     conn.execute("CREATE INDEX IF NOT EXISTS idx_tokens_participant ON drink_tokens(participant_id)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_dopewars_scores_top_score ON dopewars_scores(top_score DESC, achieved_at ASC)")
 
+    seeded_prompts = {row["text"] for row in conn.execute("SELECT text FROM drawing_prompt_seeds")}
+    for prompt in DRAWING_PROMPTS:
+        if prompt not in seeded_prompts:
+            conn.execute("INSERT OR IGNORE INTO drawing_prompts (text, created_at) VALUES (?, ?)", (prompt, now()))
+            conn.execute("INSERT INTO drawing_prompt_seeds (text) VALUES (?)", (prompt,))
+
     existing_count = conn.execute("SELECT COUNT(*) FROM questions").fetchone()[0]
     if existing_count == 0:
         for item in make_seed_questions():
@@ -359,6 +517,20 @@ def init_db():
                     strip_internal_round_labels(item["text"])[:MAX_QUESTION_LENGTH], item["is_open_text"],
                     options[0][:MAX_OPTION_LENGTH], options[1][:MAX_OPTION_LENGTH],
                     options[2][:MAX_OPTION_LENGTH], options[3][:MAX_OPTION_LENGTH], now(), item["seed_key"], item["question_number"]))
+
+    skip_keys = {row[0] for row in conn.execute("SELECT seed_key FROM deleted_seed_keys")}
+    skip_keys |= {row[0] for row in conn.execute("SELECT seed_key FROM questions WHERE seed_key IS NOT NULL")}
+    for prefix, items in EXTRA_SEED_QUESTIONS:
+        for index, (text, options) in enumerate(items, 1):
+            seed_key = f"{prefix}-{index}"
+            if seed_key in skip_keys:
+                continue
+            options = list(options) + [""] * 4
+            conn.execute("""INSERT INTO questions
+                (text, is_open_text, op1, op2, op3, op4, approved, created_at, seed_key, question_number)
+                VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?)""", (
+                    text, 0 if options[0] else 1, options[0], options[1], options[2], options[3],
+                    now(), seed_key, next_question_number(conn)))
 
     for row in conn.execute("SELECT id, text FROM questions WHERE text IS NOT NULL"):
         cleaned = strip_internal_round_labels(row["text"])
@@ -388,7 +560,7 @@ def init_db():
 
 BASE_STYLE = """
 <style>
-*{box-sizing:border-box}body{font-family:Arial,sans-serif;background:#0f1115;color:#f4f7ff;padding:20px;margin:0;min-height:100vh;display:flex;justify-content:center}.card{width:min(900px,100%);background:#171b22;border:1px solid #2a3140;border-radius:12px;padding:20px;box-shadow:0 10px 30px rgba(0,0,0,.25)}.left{display:flex;flex-direction:column;gap:12px}.muted{color:#a7b0c0}.error{background:#4a1b1b;border:1px solid #6d2f2f;padding:10px;border-radius:8px;color:#ffd1d1}.notice{background:#182d1e;border:1px solid #2b4e34;padding:10px;border-radius:8px;color:#d7f9d1}.btn{display:inline-block;padding:10px 18px;border-radius:8px;text-decoration:none;color:#fff;font-weight:700;cursor:pointer;border:none;margin:6px 0}.btn-ok{background:#2f7cf6}.btn-sec{background:#2a3140}.btn-warn{background:#d28a00}.btn-del{background:#b62d2d}.btn-buy{background:#c83333}.btn-sell{background:#2f7cf6}.btn-travel{background:#e0b100;color:#171b22}.btn-bank{background:#1f9d5a}.btn-debt{background:#e08400}.btn-reset{background:#c52ecf}.btn-quit{background:#10a9d6}.small{padding:6px 12px;font-size:12px}.question{background:#111821;border:1px solid #2a3140;border-radius:10px;padding:14px}.choice{display:flex;align-items:center;gap:8px;background:#161d2a;padding:10px;border-radius:8px}.resp{background:#121822;border:1px solid #2a3140;padding:10px;border-radius:8px;margin:5px 0}.bar{width:100%;height:12px;background:#1e2430;border-radius:999px;overflow:hidden;margin:8px 0}.fill{height:100%;background:#2f7cf6}.admin-row{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:10px}.bank-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px}textarea,input,select{width:100%;padding:10px;border-radius:8px;border:1px solid #485264;background:#0d1219;color:#f4f7ff}.table{width:100%;border-collapse:collapse}th,td{padding:8px 10px;border-bottom:1px solid #2a3140;text-align:left}h1,h2,h3{margin:0 0 12px}.form{display:flex;flex-direction:column;gap:12px}input[type='radio']{width:auto}a{color:#9ac1ff}
+*{box-sizing:border-box}body{font-family:Arial,sans-serif;background:#0f1115;color:#f4f7ff;padding:20px;margin:0;min-height:100vh;display:flex;justify-content:center}.card{width:min(900px,100%);background:#171b22;border:1px solid #2a3140;border-radius:12px;padding:20px;box-shadow:0 10px 30px rgba(0,0,0,.25)}.left{display:flex;flex-direction:column;gap:12px}.muted{color:#a7b0c0}.error{background:#4a1b1b;border:1px solid #6d2f2f;padding:10px;border-radius:8px;color:#ffd1d1}.notice{background:#182d1e;border:1px solid #2b4e34;padding:10px;border-radius:8px;color:#d7f9d1}.btn{display:inline-block;padding:10px 18px;border-radius:8px;text-decoration:none;color:#fff;font-weight:700;cursor:pointer;border:none;margin:6px 0}.btn-ok{background:#2f7cf6}.btn-sec{background:#2a3140}.btn-warn{background:#d28a00}.btn-del{background:#b62d2d}.btn-buy{background:#c83333}.btn-sell{background:#2f7cf6}.btn-travel{background:#e0b100;color:#171b22}.btn-bank{background:#1f9d5a}.btn-debt{background:#e08400}.btn-reset{background:#c52ecf}.btn-quit{background:#10a9d6}.small{padding:6px 12px;font-size:12px}.question{background:#111821;border:1px solid #2a3140;border-radius:10px;padding:14px}.choice{display:flex;align-items:center;gap:8px;background:#161d2a;padding:10px;border-radius:8px}.resp{background:#121822;border:1px solid #2a3140;padding:10px;border-radius:8px;margin:5px 0}.bar{width:100%;height:12px;background:#1e2430;border-radius:999px;overflow:hidden;margin:8px 0}.fill{height:100%;background:#2f7cf6}.admin-row{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:10px}.bank-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px}textarea,input,select{width:100%;padding:10px;border-radius:8px;border:1px solid #485264;background:#0d1219;color:#f4f7ff}.table{width:100%;border-collapse:collapse}th,td{padding:8px 10px;border-bottom:1px solid #2a3140;text-align:left}h1,h2,h3{margin:0 0 12px}.form{display:flex;flex-direction:column;gap:12px}input[type='radio']{width:auto}a{color:#9ac1ff}.admin-head{display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:8px}.admin-head h1,.admin-head h2{margin:0}.tabs{display:flex;flex-wrap:wrap;gap:6px;margin:14px 0 18px;padding-bottom:10px;border-bottom:2px solid #2a3140}.tab{padding:8px 14px;border-radius:8px;background:#1e2430;color:#cfd8ea;text-decoration:none;font-weight:700}.tab.active{background:#2f7cf6;color:#fff}.admin-row form{margin:0}.admin-row .btn{margin:0}td .admin-row{margin-top:0}.opts{color:#a7b0c0;font-size:13px;margin-top:4px}.pager{display:flex;gap:8px;align-items:center;margin-top:12px}
 </style>
 """
 
@@ -571,7 +743,7 @@ def question_form(title, action, question=None, error=""):
         <label>Question</label><textarea name='text' maxlength='{MAX_QUESTION_LENGTH}' required>{escape(strip_internal_round_labels(question.get('text', '') or ''))}</textarea>
         <label>Response type</label><select name='question_type'><option value='open' {'selected' if question_type == 'open' else ''}>Free-write response</option><option value='choice' {'selected' if question_type == 'choice' else ''}>Multiple choice</option></select>
         <label>Choices</label><input name='op1' maxlength='{MAX_OPTION_LENGTH}' value='{fields[0]}' placeholder='Choice 1'><input name='op2' maxlength='{MAX_OPTION_LENGTH}' value='{fields[1]}' placeholder='Choice 2'><input name='op3' maxlength='{MAX_OPTION_LENGTH}' value='{fields[2]}' placeholder='Choice 3'><input name='op4' maxlength='{MAX_OPTION_LENGTH}' value='{fields[3]}' placeholder='Choice 4'>
-        <button class='btn btn-ok' type='submit'>Save</button><a class='btn btn-sec' href='/admin'>Cancel</a></form>""")
+        <button class='btn btn-ok' type='submit'>Save</button><a class='btn btn-sec' href='/admin?tab={'submissions' if 'suggestion' in action else 'questions'}'>Cancel</a></form>""")
 
 
 def dopewars_inventory():
@@ -821,6 +993,7 @@ def menu():
         "<a class='btn btn-sec' href='/gold-users'>🥇 Gold Users</a>",
         "<a class='btn btn-sec' href='/games/dopewars'>🕹 Games</a>",
         "<a class='btn btn-sec' href='/games/drawing'>🎨 Drawing with Friends</a>",
+        "<a class='btn btn-sec' href='/advertise'>📣 Advertise on the TV</a>",
         "<a class='btn btn-sec' href='/admin'>🛠 Admin</a>",
         "<div class='question left'><h2>🕹 Dopewars</h2><p>Classic text-based street trading across NYC.</p><a class='btn btn-ok' href='/games/dopewars'>Play Dopewars</a><h3>High Scores</h3>",
     ]
@@ -846,6 +1019,7 @@ table{border-collapse:collapse;font-size:4vh;min-width:60vw}td,th{padding:1.2vh 
 th{color:#a7b0c0;font-size:2.8vh}td.score{color:#80efad;font-weight:bold;text-align:right}tr.first td{color:#ffd54a}
 .timer{font-size:22vh;font-weight:bold;color:#ffd54a;line-height:1}.art{max-height:62vh;max-width:90vw;border-radius:12px;background:#fff;margin:1vh 0}
 .chips{display:flex;flex-wrap:wrap;gap:1.5vh;justify-content:center;margin:3vh 0}.chip{background:#6a3fb5;padding:1.2vh 2.5vw;border-radius:999px;font-size:3.5vh}
+.adimg{max-height:62vh;max-width:90vw;border-radius:12px}
 .grid{display:flex;flex-wrap:wrap;gap:3vh;justify-content:center;margin:2vh 0}.cell{position:relative}.cell img{height:30vh;max-width:28vw;background:#fff;border-radius:10px}.cell img.win{height:55vh;max-width:80vw}.num{position:absolute;top:-1.5vh;left:-1.5vh;background:#ffd54a;color:#111;font-weight:bold;font-size:5vh;border-radius:999px;padding:0 2vh}
 </style></head><body><div id='app'><h1>🍺 Cotton Flat Bar Quiz</h1></div>
 <script>
@@ -854,10 +1028,11 @@ function esc(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;',
 const BOARD_MS = 12000;
 function fmtScore(b, v){ return (b.unit=='$' ? '$' : '') + Number(v).toLocaleString(); }
 function renderScores(st){
-  const boards = st.boards.filter(b=>b.rows.length || b.message);
+  const boards = st.boards.filter(b=>b.rows.length || b.message || b.ad);
   if(!boards.length) return "<h1>Cotton Flat Bar Quiz</h1><p class='muted'>No scores yet. Join the Wi-Fi <b>Cotton Flat Bar Quiz</b> and play!</p>";
   const pick = Math.floor(Date.now()/BOARD_MS) % boards.length;
   const b = boards[pick];
+  if(b.ad) return `<h1>${esc(b.title)}</h1><img class='adimg' src='${esc(b.ad)}'>${b.caption ? `<p style='font-size:4vh;margin:2vh 0 0'>${esc(b.caption)}</p>` : ''}<p class='muted'>Advertise here: Menu &gt; Advertise on the TV &middot; ${pick+1}/${boards.length}</p>`;
   if(b.message) return `<h1>${esc(b.title)}</h1><p style='font-size:5vh;white-space:pre-wrap'>${esc(b.message)}</p><p class='muted'>${pick+1}/${boards.length}</p>`;
   let h = `<h1>${esc(b.title)}</h1><table><tr><th>#</th><th>Player</th><th style='text-align:right'>${esc(b.label)}</th></tr>`;
   b.rows.forEach((r,i)=>{h += `<tr class='${i==0?"first":""}'><td>${i+1}</td><td>${esc(r.name)}</td><td class='score'>${fmtScore(b, r.score)}</td></tr>`;});
@@ -932,7 +1107,108 @@ def tv_boards(conn, include_hidden=False):
             boards.append(board)
     for message in conn.execute("SELECT * FROM tv_messages ORDER BY id"):
         boards.append({"key": f"message{message['id']}", "id": message["id"], "title": message["title"], "message": message["body"], "rows": [], "enabled": True})
+    for ad in live_ads(conn):
+        boards.append({"key": f"ad{ad['id']}", "id": ad["id"], "title": ad["business"], "ad": f"/ads/{ad['id']}/image", "caption": ad["message"], "rows": [], "enabled": True})
     return boards
+
+
+def ad_image_type(data):
+    for signature, mime in AD_SIGNATURES:
+        if data.startswith(signature):
+            return mime
+    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return "image/webp"
+    return None
+
+
+def clean_line(value, limit):
+    return " ".join((value or "").split())[:limit]
+
+
+def live_ads(conn):
+    return conn.execute(
+        "SELECT id, business, message FROM ads WHERE status = 'approved' AND expires_at > ? ORDER BY approved_at, id",
+        (clock(),),
+    ).fetchall()
+
+
+def ad_form(error="", notice=""):
+    prices = "".join(f"<p style='margin:0'><strong>{plan['price']}</strong> {plan['label']}: on the TV for {plan['length']}</p>" for plan in AD_PLANS.values())
+    plans = "".join(
+        f"<label class='choice'><input type='radio' name='plan' value='{key}'{' checked' if key == 'shoutout' else ''}> {plan['price']} {plan['label']} ({plan['length']})</label>"
+        for key, plan in AD_PLANS.items()
+    )
+    return page("Advertise", (
+        f"<h1>📣 Advertise on the TV</h1>{error}{notice}"
+        f"<div class='question left'><h2 style='margin:0'>Prices</h2>{prices}"
+        "<ol style='margin:0;padding-left:20px;line-height:1.6'><li>Pick a plan and upload your picture below.</li>"
+        f"<li>Send the price on CashApp to <strong style='font-size:20px;color:#80efad'>{CASHAPP_TAG}</strong> with your name in the note.</li>"
+        "<li>Once the host sees your payment, your ad joins the TV rotation.</li></ol></div>"
+        "<form method='post' enctype='multipart/form-data' class='form'>"
+        "<label>Business or shoutout name</label><input name='business' maxlength='60' required placeholder='e.g. Main Street Tacos or Happy Birthday Sam'>"
+        "<label>Caption under your picture (optional)</label><input name='message' maxlength='120' placeholder='e.g. $2 tacos every Tuesday'>"
+        "<label>Your name, CashApp name and phone or email (only the host sees this)</label><input name='contact' maxlength='100' required>"
+        f"<label>Plan</label>{plans}"
+        "<label>Picture: PNG, JPG, GIF or WebP, up to 3 MB. Wide pictures look best.</label>"
+        "<input type='file' name='image' accept='image/png,image/jpeg,image/gif,image/webp' required>"
+        "<button class='btn btn-ok' type='submit'>Send for Approval</button></form><a class='btn btn-sec' href='/'>Back to Menu</a>"
+    ))
+
+
+@app.route("/advertise", methods=["GET", "POST"])
+def advertise():
+    if request.method == "GET":
+        return ad_form()
+    business = clean_line(request.form.get("business"), 60)
+    message = clean_line(request.form.get("message"), 120)
+    contact = clean_line(request.form.get("contact"), 100)
+    plan = request.form.get("plan", "")
+    upload = request.files.get("image")
+    data = upload.read(AD_MAX_BYTES + 1) if upload else b""
+    mime = ad_image_type(data)
+    if not business or not contact or plan not in AD_PLANS:
+        error = "Fill in your name, contact details and plan."
+    elif not data:
+        error = "Choose a picture to upload."
+    elif len(data) > AD_MAX_BYTES:
+        error = "That picture is over 3 MB. Try a smaller one."
+    elif not mime:
+        error = "Only PNG, JPG, GIF or WebP pictures can be uploaded."
+    else:
+        with closing(db_conn()) as conn:
+            if conn.execute("SELECT COUNT(*) FROM ads WHERE status = 'pending'").fetchone()[0] >= AD_MAX_PENDING:
+                error = "Too many ads are waiting for the host right now. Please try again later."
+            else:
+                conn.execute(
+                    "INSERT INTO ads (business, message, contact, plan, mime, image, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (business, message, contact, plan, mime, sqlite3.Binary(data), clock()),
+                )
+                conn.commit()
+                price = AD_PLANS[plan]["price"]
+                return ad_form(notice=(
+                    f"<div class='notice'>Got it! Now send {price} on CashApp to <strong>{CASHAPP_TAG}</strong> with "
+                    f"&ldquo;{escape(business)}&rdquo; in the note. Your ad goes on the TV once the host confirms payment.</div>"
+                ))
+    return ad_form(error=f"<div class='error'>{escape(error)}</div>")
+
+
+@app.errorhandler(413)
+def upload_too_large(_error):
+    return ad_form(error="<div class='error'>That upload is too big. Pictures must be under 3 MB.</div>"), 413
+
+
+@app.route("/ads/<int:ad_id>/image")
+def ad_image(ad_id):
+    with closing(db_conn()) as conn:
+        row = conn.execute("SELECT mime, image, status, expires_at FROM ads WHERE id = ?", (ad_id,)).fetchone()
+    live = row is not None and row["status"] == "approved" and (row["expires_at"] or 0) > clock()
+    if not row or not (live or admin_required()):
+        return Response("Not found", status=404, mimetype="text/plain")
+    response = Response(bytes(row["image"]), mimetype=row["mime"])
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["Content-Security-Policy"] = "default-src 'none'"
+    response.headers["Cache-Control"] = "private, max-age=300"
+    return response
 
 
 @app.route("/tv")
@@ -1084,7 +1360,8 @@ def drawing_token():
 
 def drawing_new_prompt(conn):
     recent = {row["prompt"] for row in conn.execute("SELECT prompt FROM drawing_rounds ORDER BY id DESC LIMIT 15")}
-    choices = [prompt for prompt in DRAWING_PROMPTS if prompt not in recent] or DRAWING_PROMPTS
+    prompts = [row["text"] for row in conn.execute("SELECT text FROM drawing_prompts")] or DRAWING_PROMPTS
+    choices = [prompt for prompt in prompts if prompt not in recent] or prompts
     return random.choice(choices)
 
 
@@ -1332,7 +1609,7 @@ def drawing_admin_end():
         current_round = drawing_current_round(conn)
         if current_round:
             drawing_end_round(conn, current_round[0]["id"], "cancelled")
-    return redirect(url_for("admin"))
+    return admin_redirect("games")
 
 
 @app.route("/games")
@@ -1621,6 +1898,8 @@ def submit_question():
 def admin_tv_html(conn):
     html = ["<h2>TV Screens</h2><p class='muted'>The TV rotates these every 12 seconds. Score boards with nobody on them are skipped.</p>"]
     for board in tv_boards(conn, include_hidden=True):
+        if "ad" in board:
+            continue
         if "message" in board:
             html.append(
                 f"<div class='question left'><strong>{escape(board['title'])}</strong><p>{escape(board['message'])}</p>"
@@ -1651,6 +1930,101 @@ def admin_tv_html(conn):
     return "".join(html)
 
 
+def admin_redirect(tab):
+    return redirect(url_for("admin", tab=tab))
+
+
+def admin_players_html(conn):
+    participants = participant_stats(conn)
+    if not participants:
+        return "<h2>Players & Drink Tokens</h2><p class='muted'>No players yet.</p>"
+    body = (
+        "<h2>Players & Drink Tokens</h2><p class='muted'>Redeem a token when a player shows you their screen. Rename fixes rude or duplicate names.</p>"
+        "<div style='overflow-x:auto'><table class='table'><tr><th>Player</th><th>Answered</th><th>Tokens ready</th><th>Given</th><th>Progress</th><th>Action</th></tr>"
+    )
+    for participant in participants:
+        progress = participant["answered"] % TOKEN_MILESTONE
+        body += f"<tr><td>{escape(participant['name'])}</td><td>{participant['answered']}</td><td>{participant['unredeemed']}</td><td>{participant['redeemed']}</td><td>{progress}/{TOKEN_MILESTONE}</td><td><a class='btn btn-ok small' href='/admin/redeem-token/{participant['id']}'>Redeem</a><form method='post' action='/admin/rename/{participant['id']}' class='admin-row'><input name='name' maxlength='{PLAYER_NAME_MAX_LENGTH}' required placeholder='New name' style='width:auto'><button class='btn btn-warn small'>Rename</button></form></td></tr>"
+    return body + "</table></div>"
+
+
+def admin_submissions_html(conn):
+    suggestions = conn.execute("SELECT * FROM suggestions ORDER BY id ASC").fetchall()
+    body = "<h2>Submitted Questions</h2>"
+    if not suggestions:
+        return body + "<p class='muted'>Nothing waiting. Patrons send these from Submit Question on the menu.</p>"
+    body += "<p class='muted'>Approve adds the question to the quiz. Edit first if it needs fixing.</p>"
+    for suggestion in suggestions:
+        body += f"<div class='question left'><strong>{escape(strip_internal_round_labels(suggestion['text']))}</strong><p class='muted'>{ 'Free write' if suggestion['is_open_text'] else 'Multiple choice'}</p>"
+        if not suggestion["is_open_text"]:
+            body += "<br>".join(escape(option) for option in options_for(suggestion))
+        body += f"<div class='admin-row'><a class='btn btn-warn small' href='/admin/edit-suggestion/{suggestion['id']}'>Edit</a><form method='post' action='/admin/approve/{suggestion['id']}'><button class='btn btn-ok small'>Approve</button></form><form method='post' action='/admin/reject/{suggestion['id']}'><button class='btn btn-del small'>Reject</button></form></div></div>"
+    return body
+
+
+def admin_questions_html(conn):
+    search = re.sub(r"[%_]", "", request.args.get("q", "")).strip()[:100]
+    where, params = ("WHERE text LIKE ?", (f"%{search}%",)) if search else ("", ())
+    total = conn.execute(f"SELECT COUNT(*) FROM questions {where}", params).fetchone()[0]
+    pages = max(1, math.ceil(total / ADMIN_QUESTIONS_PER_PAGE))
+    page_no = min(max(parse_positive_int(request.args.get("p")) or 1, 1), pages)
+    offset = (page_no - 1) * ADMIN_QUESTIONS_PER_PAGE
+    rows = conn.execute(
+        f"SELECT * FROM questions {where} ORDER BY question_number DESC, id DESC LIMIT ? OFFSET ?",
+        params + (ADMIN_QUESTIONS_PER_PAGE, offset),
+    ).fetchall()
+    html = [
+        "<div class='admin-head'><h2>Quiz Questions</h2><a class='btn btn-ok small' href='/admin/add-question'>Add Question</a></div>",
+        "<form method='get' action='/admin' class='admin-row'><input type='hidden' name='tab' value='questions'>"
+        f"<input name='q' value='{escape(search)}' placeholder='Search questions' style='flex:1'>"
+        "<button class='btn btn-sec small' type='submit'>Search</button>"
+        + ("<a class='btn btn-sec small' href='/admin?tab=questions'>Clear</a>" if search else "") + "</form>",
+    ]
+    if not rows:
+        html.append("<p class='muted'>No questions found.</p>")
+        return "".join(html)
+    html.append(f"<p class='muted'>Showing {offset + 1}-{offset + len(rows)} of {total}, newest first.</p><table class='table'><tr><th>#</th><th>Question</th><th>Action</th></tr>")
+    for question in rows:
+        options = "" if question["is_open_text"] else "<div class='opts'>" + " · ".join(escape(option) for option in options_for(question)) + "</div>"
+        kind = "Free write" if question["is_open_text"] else "Multiple choice"
+        html.append(
+            f"<tr><td>{question['question_number']}</td><td><div>{escape(strip_internal_round_labels(question['text']))}</div>{options}<div class='opts'>{kind}</div></td>"
+            f"<td><div class='admin-row'><a class='btn btn-warn small' href='/admin/edit-question/{question['id']}'>Edit</a>"
+            f"<form method='post' action='/admin/delete-question-number/{question['question_number']}' onsubmit='return confirm(&quot;Delete this question and all its answers?&quot;);'>"
+            "<button class='btn btn-del small'>Delete</button></form></div></td></tr>"
+        )
+    html.append("</table>")
+    if pages > 1:
+        def link(number, label):
+            return f"<a class='btn btn-sec small' href='/admin?tab=questions&p={number}&q={quote(search)}'>{label}</a>"
+        html.append(
+            "<div class='pager'>" + (link(page_no - 1, "Previous") if page_no > 1 else "")
+            + f"<span class='muted'>Page {page_no} of {pages}</span>" + (link(page_no + 1, "Next") if page_no < pages else "") + "</div>"
+        )
+    return "".join(html)
+
+
+def admin_games_html(conn):
+    return (
+        "<h2>Games</h2><div class='admin-row'><a class='btn btn-sec small' href='/games/dopewars'>Dopewars</a>"
+        "<a class='btn btn-sec small' href='/games/drawing'>Drawing with Friends</a>"
+        "<form method='post' action='/admin/drawing/end' onsubmit='return confirm(&quot;End the current drawing round?&quot;);'>"
+        "<button class='btn btn-del small'>End Current Drawing Round</button></form></div>"
+        "<p class='muted'>Dopewars high scores are managed under TV Screens.</p>"
+    ) + admin_prompts_html(conn)
+
+
+ADMIN_QUESTIONS_PER_PAGE = 25
+ADMIN_TAB_LABELS = {"players": "Players & Tokens", "questions": "Questions", "submissions": "Submissions", "tv": "TV Screens & Ads", "games": "Games & Prompts"}
+ADMIN_TAB_RENDERERS = {
+    "players": admin_players_html,
+    "questions": admin_questions_html,
+    "submissions": admin_submissions_html,
+    "tv": lambda conn: admin_ads_html(conn) + admin_tv_html(conn),
+    "games": admin_games_html,
+}
+
+
 @app.route("/admin", methods=["GET", "POST"])
 def admin():
     if request.method == "POST" and request.form.get("action") == "login":
@@ -1661,36 +2035,140 @@ def admin():
     if not admin_required():
         return page("Admin", "<h1>Host Admin</h1><form method='post'><input type='password' name='password' required placeholder='Admin code'><input type='hidden' name='action' value='login'><button class='btn btn-ok' type='submit'>Log In</button></form>")
 
+    tab = request.args.get("tab", "players")
+    if tab not in ADMIN_TAB_LABELS:
+        tab = "players"
     with closing(db_conn()) as conn:
-        suggestions = conn.execute("SELECT * FROM suggestions ORDER BY id ASC").fetchall()
-        questions = conn.execute("SELECT * FROM questions ORDER BY id DESC").fetchall()
-        participants = participant_stats(conn)
-        tv_html = admin_tv_html(conn)
-    body = "<h1>Host Admin</h1><form method='post' action='/admin/play-as-host'><button class='btn btn-ok' type='submit'>Play as Host (quiz, Dopewars, drawing)</button></form><a class='btn btn-ok' href='/admin/add-question'>Add Question</a><h2>Participant Drink Tokens</h2>"
-    if participants:
-        body += "<table class='table'><tr><th>Player</th><th>Answered</th><th>Tokens ready</th><th>Given</th><th>Progress</th><th>Action</th></tr>"
-        for participant in participants:
-            progress = participant["answered"] % TOKEN_MILESTONE
-            body += f"<tr><td>{escape(participant['name'])}</td><td>{participant['answered']}</td><td>{participant['unredeemed']}</td><td>{participant['redeemed']}</td><td>{progress}/{TOKEN_MILESTONE}</td><td><a class='btn btn-ok small' href='/admin/redeem-token/{participant['id']}'>Redeem</a><form method='post' action='/admin/rename/{participant['id']}' class='admin-row'><input name='name' maxlength='{PLAYER_NAME_MAX_LENGTH}' required placeholder='New name' style='width:auto'><button class='btn btn-warn small'>Rename</button></form></td></tr>"
-        body += "</table>"
-    else:
-        body += "<p class='muted'>No participants yet.</p>"
-    body += "<h2>Pending Submissions</h2>"
-    if not suggestions:
-        body += "<p class='muted'>No pending submissions.</p>"
-    for suggestion in suggestions:
-        body += f"<div class='question left'><strong>{escape(strip_internal_round_labels(suggestion['text']))}</strong><p class='muted'>{ 'Free write' if suggestion['is_open_text'] else 'Multiple choice'}</p>"
-        if not suggestion["is_open_text"]:
-            body += "<br>".join(escape(option) for option in options_for(suggestion))
-        body += f"<div class='admin-row'><a class='btn btn-warn small' href='/admin/edit-suggestion/{suggestion['id']}'>Edit</a><form method='post' action='/admin/approve/{suggestion['id']}'><button class='btn btn-ok small'>Approve</button></form><form method='post' action='/admin/reject/{suggestion['id']}'><button class='btn btn-del small'>Reject</button></form></div></div>"
-    body += "<h2>Active Questions</h2>"
-    for question in questions:
-        kind = "Free write" if question["is_open_text"] else "Multiple choice"
-        body += f"<div class='question left'><strong>{escape(strip_internal_round_labels(question['text']))}</strong><p class='muted'>{kind} · Question {question['question_number']} · ID {question['id']}</p><div class='admin-row'><a class='btn btn-warn small' href='/admin/edit-question/{question['id']}'>Edit</a><form method='post' action='/admin/delete-question-number/{question['question_number']}' onsubmit=\"return confirm('Delete this question and all answers?');\"><button class='btn btn-del small'>Delete</button></form></div></div>"
-    body += tv_html
-    body += "<h2>Drawing with Friends</h2><form method='post' action='/admin/drawing/end' onsubmit=\"return confirm('End the current drawing round?');\"><button class='btn btn-del small'>End Current Drawing Round</button></form>"
-    body += "<a class='btn btn-sec' href='/tv'>TV Screen</a><a class='btn btn-sec' href='/answers'>View Community Answers</a><a class='btn btn-sec' href='/gold-users'>View Gold Users</a><a class='btn btn-sec' href='/admin/logout'>Log Out</a><a class='btn btn-sec' href='/'>Back to Menu</a>"
+        counts = {
+            "questions": conn.execute("SELECT COUNT(*) FROM questions").fetchone()[0],
+            "submissions": conn.execute("SELECT COUNT(*) FROM suggestions").fetchone()[0],
+        }
+        content = ADMIN_TAB_RENDERERS[tab](conn)
+    nav = "".join(
+        f"<a class='tab{' active' if key == tab else ''}' href='/admin?tab={key}'>{label}{f' ({counts[key]})' if key in counts else ''}</a>"
+        for key, label in ADMIN_TAB_LABELS.items()
+    )
+    body = (
+        "<div class='admin-head'><h1>Host Admin</h1><div class='admin-row'>"
+        "<form method='post' action='/admin/play-as-host'><button class='btn btn-ok small' type='submit'>Play as Host</button></form>"
+        "<a class='btn btn-sec small' href='/tv'>TV Screen</a><a class='btn btn-sec small' href='/answers'>Community Answers</a>"
+        "<a class='btn btn-sec small' href='/gold-users'>Gold Users</a><a class='btn btn-sec small' href='/'>Menu</a>"
+        "<a class='btn btn-sec small' href='/admin/logout'>Log Out</a></div></div>"
+        f"<nav class='tabs'>{nav}</nav>{content}"
+    )
     return page("Host Admin", body)
+
+
+def admin_prompts_html(conn):
+    prompts = conn.execute("SELECT id, text FROM drawing_prompts ORDER BY text COLLATE NOCASE").fetchall()
+    html = [
+        f"<h2>Drawing Prompts ({len(prompts)})</h2><p class='muted'>Each round picks one at random, skipping the last 15 used.</p>",
+        "<form method='post' action='/admin/drawing/prompts' class='admin-row'>"
+        f"<input name='text' maxlength='{DRAWING_PROMPT_MAX_LENGTH}' required placeholder='New prompt, e.g. A cat driving a tractor' style='flex:1'>"
+        "<button class='btn btn-ok small' type='submit'>Add Prompt</button></form>",
+    ]
+    for prompt in prompts:
+        html.append(
+            f"<form method='post' action='/admin/drawing/prompts/{prompt['id']}' class='admin-row'>"
+            f"<input name='text' maxlength='{DRAWING_PROMPT_MAX_LENGTH}' required value='{escape(prompt['text'])}' style='flex:1'>"
+            "<button class='btn btn-warn small' type='submit'>Save</button>"
+            f"<button class='btn btn-del small' formaction='/admin/drawing/prompts/{prompt['id']}/delete' formnovalidate onclick=\"return confirm('Delete this prompt?');\">Delete</button></form>"
+        )
+    return "".join(html)
+
+
+def clean_prompt(value):
+    return re.sub(r"\s+", " ", value or "").strip()[:DRAWING_PROMPT_MAX_LENGTH]
+
+
+@app.route("/admin/drawing/prompts", methods=["POST"])
+def admin_add_prompt():
+    denied = require_admin()
+    if denied:
+        return denied
+    text = clean_prompt(request.form.get("text"))
+    if text:
+        with closing(db_conn()) as conn:
+            conn.execute("INSERT OR IGNORE INTO drawing_prompts (text, created_at) VALUES (?, ?)", (text, now()))
+            conn.commit()
+    return admin_redirect("games")
+
+
+@app.route("/admin/drawing/prompts/<int:prompt_id>", methods=["POST"])
+def admin_edit_prompt(prompt_id):
+    denied = require_admin()
+    if denied:
+        return denied
+    text = clean_prompt(request.form.get("text"))
+    if text:
+        with closing(db_conn()) as conn:
+            conn.execute("UPDATE OR IGNORE drawing_prompts SET text = ? WHERE id = ?", (text, prompt_id))
+            conn.commit()
+    return admin_redirect("games")
+
+
+@app.route("/admin/drawing/prompts/<int:prompt_id>/delete", methods=["POST"])
+def admin_delete_prompt(prompt_id):
+    denied = require_admin()
+    if denied:
+        return denied
+    with closing(db_conn()) as conn:
+        conn.execute("DELETE FROM drawing_prompts WHERE id = ?", (prompt_id,))
+        conn.commit()
+    return admin_redirect("games")
+
+
+def admin_ads_html(conn):
+    current = clock()
+    ads = conn.execute("SELECT id, business, message, contact, plan, status, created_at, expires_at FROM ads ORDER BY id DESC").fetchall()
+    day = lambda stamp: datetime.fromtimestamp(stamp or 0).strftime("%b %d, %Y")
+    def button(ad, action, label, style):
+        confirm = "" if action == "approve" else " onsubmit='return confirm(&quot;Delete this ad?&quot;);'"
+        return f"<form method='post' action='/admin/ads/{ad['id']}/{action}'{confirm}><button class='btn {style} small'>{label}</button></form>"
+    def card(ad, note, buttons):
+        plan = AD_PLANS.get(ad["plan"], AD_PLANS["shoutout"])
+        caption = f"<p style='margin:0'>{escape(ad['message'])}</p>" if ad["message"] else ""
+        return (
+            f"<div class='question left'><img src='/ads/{ad['id']}/image' alt='' style='max-width:100%;max-height:200px;border-radius:8px;align-self:flex-start'>"
+            f"<strong>{escape(ad['business'])}</strong>{caption}<p class='muted' style='margin:0'>{plan['label']} · {plan['price']} · {note}<br>Contact: {escape(ad['contact'])}</p>"
+            f"<div class='admin-row'>{buttons}</div></div>"
+        )
+    groups = [
+        ("Waiting for approval", [ad for ad in ads if ad["status"] != "approved"], lambda ad: card(ad, f"sent {day(ad['created_at'])}", button(ad, "approve", "Paid: Approve", "btn-ok") + button(ad, "delete", "Reject", "btn-del"))),
+        ("On the TV now", [ad for ad in ads if ad["status"] == "approved" and ad["expires_at"] > current], lambda ad: card(ad, f"until {day(ad['expires_at'])}", button(ad, "delete", "Remove", "btn-del"))),
+        ("Expired", [ad for ad in ads if ad["status"] == "approved" and ad["expires_at"] <= current], lambda ad: card(ad, f"ended {day(ad['expires_at'])}", button(ad, "approve", "Renew", "btn-ok") + button(ad, "delete", "Delete", "btn-del"))),
+    ]
+    html = [f"<h2>TV Ads</h2><p class='muted'>Patrons upload at <a href='/advertise'>Advertise on the TV</a>. Check your CashApp ({CASHAPP_TAG}) for their payment before approving: the app can't see payments.</p>"]
+    for title, items, render in groups:
+        if items or title != "Expired":
+            html.append(f"<h3>{title} ({len(items)})</h3>" + ("".join(render(ad) for ad in items) or "<p class='muted'>None.</p>"))
+    return "".join(html)
+
+
+@app.route("/admin/ads/<int:ad_id>/approve", methods=["POST"])
+def admin_approve_ad(ad_id):
+    denied = require_admin()
+    if denied:
+        return denied
+    with closing(db_conn()) as conn:
+        ad = conn.execute("SELECT plan FROM ads WHERE id = ?", (ad_id,)).fetchone()
+        if ad:
+            current = clock()
+            days = AD_PLANS.get(ad["plan"], AD_PLANS["shoutout"])["days"]
+            conn.execute("UPDATE ads SET status = 'approved', approved_at = ?, expires_at = ? WHERE id = ?", (current, current + days * 86400, ad_id))
+            conn.commit()
+    return admin_redirect("tv")
+
+
+@app.route("/admin/ads/<int:ad_id>/delete", methods=["POST"])
+def admin_delete_ad(ad_id):
+    denied = require_admin()
+    if denied:
+        return denied
+    with closing(db_conn()) as conn:
+        conn.execute("DELETE FROM ads WHERE id = ?", (ad_id,))
+        conn.commit()
+    return admin_redirect("tv")
 
 
 @app.route("/admin/play-as-host", methods=["POST"])
@@ -1726,7 +2204,7 @@ def admin_rename(participant_id):
             conn.execute("UPDATE participants SET name = ?, name_key = ? WHERE id = ?", (name, name.casefold(), participant_id))
             conn.execute("UPDATE drawing_players SET nickname = ? WHERE participant_id = ?", (name, participant_id))
             conn.commit()
-    return redirect(url_for("admin"))
+    return admin_redirect("players")
 
 
 @app.route("/admin/tv/screen/<key>", methods=["POST"])
@@ -1742,7 +2220,7 @@ def admin_tv_screen(key):
                 (key, title, 1 if request.form.get("enabled") else 0),
             )
             conn.commit()
-    return redirect(url_for("admin"))
+    return admin_redirect("tv")
 
 
 @app.route("/admin/tv/clear/<key>", methods=["POST"])
@@ -1759,7 +2237,7 @@ def admin_tv_clear(key):
         with closing(db_conn()) as conn:
             conn.execute(statement)
             conn.commit()
-    return redirect(url_for("admin"))
+    return admin_redirect("tv")
 
 
 @app.route("/admin/dopewars-score/<int:participant_id>/delete", methods=["POST"])
@@ -1770,7 +2248,7 @@ def admin_delete_dopewars_score(participant_id):
     with closing(db_conn()) as conn:
         conn.execute("DELETE FROM dopewars_scores WHERE participant_id = ?", (participant_id,))
         conn.commit()
-    return redirect(url_for("admin"))
+    return admin_redirect("tv")
 
 
 @app.route("/admin/tv/message", methods=["POST"])
@@ -1784,7 +2262,7 @@ def admin_tv_message():
         with closing(db_conn()) as conn:
             conn.execute("INSERT INTO tv_messages (title, body) VALUES (?, ?)", (title, text))
             conn.commit()
-    return redirect(url_for("admin"))
+    return admin_redirect("tv")
 
 
 @app.route("/admin/tv/message/<int:message_id>/delete", methods=["POST"])
@@ -1795,7 +2273,7 @@ def admin_tv_message_delete(message_id):
     with closing(db_conn()) as conn:
         conn.execute("DELETE FROM tv_messages WHERE id = ?", (message_id,))
         conn.commit()
-    return redirect(url_for("admin"))
+    return admin_redirect("tv")
 
 
 @app.route("/admin/redeem-token/<int:participant_id>", methods=["GET", "POST"])
@@ -1808,7 +2286,7 @@ def redeem_token(participant_id):
         if token:
             conn.execute("UPDATE drink_tokens SET redeemed_at = ? WHERE id = ?", (now(), token["id"]))
             conn.commit()
-    return redirect(url_for("admin"))
+    return admin_redirect("players")
 
 
 @app.route("/admin/add-question", methods=["GET", "POST"])
@@ -1826,7 +2304,7 @@ def add_question():
             with closing(db_conn()) as conn:
                 conn.execute("INSERT INTO questions (text, is_open_text, op1, op2, op3, op4, approved, created_at, question_number) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)", (text[:500], is_open, options[0][:200], options[1][:200], options[2][:200], options[3][:200], now(), next_question_number(conn)))
                 conn.commit()
-            return redirect(url_for("admin"))
+            return admin_redirect("questions")
     return question_form("Add Question", url_for("add_question"), {"is_open_text": 1}, error)
 
 
@@ -1852,7 +2330,7 @@ def edit_question(question_id):
             conn.execute("UPDATE questions SET text = ?, is_open_text = ?, op1 = ?, op2 = ?, op3 = ?, op4 = ? WHERE id = ?", (text[:500], is_open, options[0][:200], options[1][:200], options[2][:200], options[3][:200], question_id))
             conn.commit()
             conn.close()
-            return redirect(url_for("admin"))
+            return admin_redirect("questions")
     result = question_form("Edit Question", url_for("edit_question", question_id=question_id), question, error)
     conn.close()
     return result
@@ -1880,7 +2358,7 @@ def edit_suggestion(suggestion_id):
             conn.execute("UPDATE suggestions SET text = ?, is_open_text = ?, op1 = ?, op2 = ?, op3 = ?, op4 = ? WHERE id = ?", (text[:500], is_open, options[0][:200], options[1][:200], options[2][:200], options[3][:200], suggestion_id))
             conn.commit()
             conn.close()
-            return redirect(url_for("admin"))
+            return admin_redirect("submissions")
     result = question_form("Edit Submission", url_for("edit_suggestion", suggestion_id=suggestion_id), suggestion, error)
     conn.close()
     return result
@@ -1898,7 +2376,7 @@ def approve_suggestion(suggestion_id):
             conn.execute("INSERT INTO questions (text, is_open_text, op1, op2, op3, op4, approved, created_at, question_number) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)", (text, suggestion["is_open_text"], suggestion["op1"], suggestion["op2"], suggestion["op3"], suggestion["op4"], now(), next_question_number(conn)))
             conn.execute("DELETE FROM suggestions WHERE id = ?", (suggestion_id,))
             conn.commit()
-    return redirect(url_for("admin"))
+    return admin_redirect("submissions")
 
 
 @app.route("/admin/reject/<int:suggestion_id>", methods=["POST"])
@@ -1909,7 +2387,11 @@ def reject_suggestion(suggestion_id):
     with closing(db_conn()) as conn:
         conn.execute("DELETE FROM suggestions WHERE id = ?", (suggestion_id,))
         conn.commit()
-    return redirect(url_for("admin"))
+    return admin_redirect("submissions")
+
+
+def forget_seed_question(conn, question_id):
+    conn.execute("INSERT OR IGNORE INTO deleted_seed_keys (seed_key) SELECT seed_key FROM questions WHERE id = ? AND seed_key IS NOT NULL", (question_id,))
 
 
 @app.route("/admin/delete-question/<int:question_id>", methods=["POST"])
@@ -1918,12 +2400,13 @@ def delete_question(question_id):
     if denied:
         return denied
     with closing(db_conn()) as conn:
+        forget_seed_question(conn, question_id)
         conn.execute("DELETE FROM votes WHERE question_id = ?", (question_id,))
         conn.execute("DELETE FROM text_responses WHERE question_id = ?", (question_id,))
         conn.execute("DELETE FROM participant_answers WHERE question_id = ?", (question_id,))
         conn.execute("DELETE FROM questions WHERE id = ?", (question_id,))
         conn.commit()
-    return redirect(url_for("admin"))
+    return admin_redirect("questions")
 
 
 @app.route("/admin/delete-question-number/<int:question_number>", methods=["POST"])
@@ -1936,12 +2419,13 @@ def delete_question_number(question_number):
         if question:
             if question["seed_key"] and seed_question_number(question["seed_key"]) == question["question_number"]:
                 record_deleted_seed_question_number(question["question_number"])
+            forget_seed_question(conn, question["id"])
             conn.execute("DELETE FROM votes WHERE question_id = ?", (question["id"],))
             conn.execute("DELETE FROM text_responses WHERE question_id = ?", (question["id"],))
             conn.execute("DELETE FROM participant_answers WHERE question_id = ?", (question["id"],))
             conn.execute("DELETE FROM questions WHERE id = ?", (question["id"],))
             conn.commit()
-    return redirect(url_for("admin"))
+    return admin_redirect("questions")
 
 
 @app.route("/admin/delete-response/<int:response_id>", methods=["POST"])
