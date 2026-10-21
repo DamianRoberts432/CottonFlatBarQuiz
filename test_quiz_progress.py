@@ -257,6 +257,24 @@ class QuizProgressTestCase(unittest.TestCase):
             conn.close()
         self.assertEqual(tuple(row), ("Edited question?", 0, "Yes", "No"))
 
+    def test_admin_question_edit_returns_to_same_page(self):
+        import re
+        self.make_admin()
+        page3 = self.client.get("/admin?tab=questions&p=3").get_data(as_text=True)
+        self.assertIn("<span class='btn btn-ok small'>3</span>", page3)
+        self.assertIn("href='/admin?tab=questions&p=1&q='>1</a>", page3)
+        qid = re.search(r"/admin/edit-question/(\d+)\?p=3&amp;q='", page3).group(1)
+        form = self.client.get(f"/admin/edit-question/{qid}?p=3").get_data(as_text=True)
+        self.assertIn(f"action='/admin/edit-question/{qid}?p=3'", form)
+        self.assertIn(f"href='/admin?tab=questions&amp;p=3#q{qid}'>Cancel", form)
+        saved = self.client.post(f"/admin/edit-question/{qid}?p=3", data={"text": "Edited on page three?", "question_type": "open"})
+        self.assertTrue(saved.headers["Location"].endswith(f"/admin?tab=questions&p=3#q{qid}"))
+        found = self.client.post(f"/admin/edit-question/{qid}?p=2&q=page three", data={"text": "Edited on page three?", "question_type": "open"})
+        self.assertTrue(found.headers["Location"].endswith(f"/admin?tab=questions&p=2&q=page+three#q{qid}"))
+        number = re.search(r"/admin/delete-question-number/(\d+)\?p=3&amp;q='", page3).group(1)
+        deleted = self.client.post(f"/admin/delete-question-number/{number}?p=3")
+        self.assertTrue(deleted.headers["Location"].endswith("/admin?tab=questions&p=3"))
+
     def test_admin_can_open_suggestion_edit(self):
         self.make_admin()
         conn = Quiz.db_conn()
