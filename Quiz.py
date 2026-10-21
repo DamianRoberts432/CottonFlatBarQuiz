@@ -3,7 +3,7 @@ from collections import Counter
 from contextlib import closing
 from datetime import datetime
 from html import escape
-from urllib.parse import quote
+from urllib.parse import quote, urlencode
 import json
 import math
 import os
@@ -563,7 +563,8 @@ def init_db():
 
 BASE_STYLE = """
 <style>
-*{box-sizing:border-box}body{font-family:Arial,sans-serif;background:#0f1115;color:#f4f7ff;padding:20px;margin:0;min-height:100vh;display:flex;justify-content:center}.card{width:min(900px,100%);background:#171b22;border:1px solid #2a3140;border-radius:12px;padding:20px;box-shadow:0 10px 30px rgba(0,0,0,.25)}.left{display:flex;flex-direction:column;gap:12px}.muted{color:#a7b0c0}.error{background:#4a1b1b;border:1px solid #6d2f2f;padding:10px;border-radius:8px;color:#ffd1d1}.notice{background:#182d1e;border:1px solid #2b4e34;padding:10px;border-radius:8px;color:#d7f9d1}.btn{display:inline-block;padding:10px 18px;border-radius:8px;text-decoration:none;color:#fff;font-weight:700;cursor:pointer;border:none;margin:6px 0}.btn-ok{background:#2f7cf6}.btn-sec{background:#2a3140}.btn-warn{background:#d28a00}.btn-del{background:#b62d2d}.btn-buy{background:#c83333}.btn-sell{background:#2f7cf6}.btn-travel{background:#e0b100;color:#171b22}.btn-bank{background:#1f9d5a}.btn-debt{background:#e08400}.btn-reset{background:#c52ecf}.btn-quit{background:#10a9d6}.small{padding:6px 12px;font-size:12px}.question{background:#111821;border:1px solid #2a3140;border-radius:10px;padding:14px}.choice{display:flex;align-items:center;gap:8px;background:#161d2a;padding:10px;border-radius:8px}.resp{background:#121822;border:1px solid #2a3140;padding:10px;border-radius:8px;margin:5px 0}.bar{width:100%;height:12px;background:#1e2430;border-radius:999px;overflow:hidden;margin:8px 0}.fill{height:100%;background:#2f7cf6}.admin-row{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:10px}.bank-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px}textarea,input,select{width:100%;padding:10px;border-radius:8px;border:1px solid #485264;background:#0d1219;color:#f4f7ff}.table{width:100%;border-collapse:collapse}th,td{padding:8px 10px;border-bottom:1px solid #2a3140;text-align:left}h1,h2,h3{margin:0 0 12px}.form{display:flex;flex-direction:column;gap:12px}input[type='radio']{width:auto}a{color:#9ac1ff}.admin-head{display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:8px}.admin-head h1,.admin-head h2{margin:0}.tabs{display:flex;flex-wrap:wrap;gap:6px;margin:14px 0 18px;padding-bottom:10px;border-bottom:2px solid #2a3140}.tab{padding:8px 14px;border-radius:8px;background:#1e2430;color:#cfd8ea;text-decoration:none;font-weight:700}.tab.active{background:#2f7cf6;color:#fff}.admin-row form{margin:0}.admin-row .btn{margin:0}td .admin-row{margin-top:0}.opts{color:#a7b0c0;font-size:13px;margin-top:4px}.pager{display:flex;gap:8px;align-items:center;margin-top:12px}
+*{box-sizing:border-box}body{font-family:Arial,sans-serif;background:#0f1115;color:#f4f7ff;padding:20px;margin:0;min-height:100vh;display:flex;justify-content:center}.card{width:min(900px,100%);background:#171b22;border:1px solid #2a3140;border-radius:12px;padding:20px;box-shadow:0 10px 30px rgba(0,0,0,.25)}.left{display:flex;flex-direction:column;gap:12px}.muted{color:#a7b0c0}.error{background:#4a1b1b;border:1px solid #6d2f2f;padding:10px;border-radius:8px;color:#ffd1d1}.notice{background:#182d1e;border:1px solid #2b4e34;padding:10px;border-radius:8px;color:#d7f9d1}.btn{display:inline-block;padding:10px 18px;border-radius:8px;text-decoration:none;color:#fff;font-weight:700;cursor:pointer;border:none;margin:6px 0}.btn-ok{background:#2f7cf6}.btn-sec{background:#2a3140}.btn-warn{background:#d28a00}.btn-del{background:#b62d2d}.btn-buy{background:#c83333}.btn-sell{background:#2f7cf6}.btn-travel{background:#e0b100;color:#171b22}.btn-bank{background:#1f9d5a}.btn-debt{background:#e08400}.btn-reset{background:#c52ecf}.btn-quit{background:#10a9d6}.small{padding:6px 12px;font-size:12px}.question{background:#111821;border:1px solid #2a3140;border-radius:10px;padding:14px}.choice{display:flex;align-items:center;gap:8px;background:#161d2a;padding:10px;border-radius:8px}.resp{background:#121822;border:1px solid #2a3140;padding:10px;border-radius:8px;margin:5px 0}.bar{width:100%;height:12px;background:#1e2430;border-radius:999px;overflow:hidden;margin:8px 0}.fill{height:100%;background:#2f7cf6}.admin-row{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:10px}.bank-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px}textarea,input,select{width:100%;padding:10px;border-radius:8px;border:1px solid #485264;background:#0d1219;color:#f4f7ff}.table{width:100%;border-collapse:collapse}th,td{padding:8px 10px;border-bottom:1px solid #2a3140;text-align:left}h1,h2,h3{margin:0 0 12px}.form{display:flex;flex-direction:column;gap:12px}input[type='radio']{width:auto}a{color:#9ac1ff}.admin-head{display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:8px}.admin-head h1,.admin-head h2{margin:0}.tabs{display:flex;flex-wrap:wrap;gap:6px;margin:14px 0 18px;padding-bottom:10px;border-bottom:2px solid #2a3140}.tab{padding:8px 14px;border-radius:8px;background:#1e2430;color:#cfd8ea;text-decoration:none;font-weight:700}.tab.active{background:#2f7cf6;color:#fff}.admin-row form{margin:0}.admin-row .btn{margin:0}td .admin-row{margin-top:0}.opts{color:#a7b0c0;font-size:13px;margin-top:4px}.pager{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin:12px 0}
+tr:target td{background:#22324d}
 </style>
 """
 
@@ -737,7 +738,7 @@ def complete_quiz_page(message):
     return page("Quiz Complete", f"<h1>Thanks!</h1><p>{escape(message)}</p><a class='btn btn-ok' href='/answers'>See Answers</a><a class='btn btn-sec' href='/'>Menu</a>")
 
 
-def question_form(title, action, question=None, error=""):
+def question_form(title, action, question=None, error="", cancel=None):
     question = dict(question) if question else {}
     question_type = "open" if question.get("is_open_text", 1) else "choice"
     fields = [escape(strip_internal_round_labels(question.get(f"op{i}", "") or "")) for i in range(1, 5)]
@@ -746,7 +747,7 @@ def question_form(title, action, question=None, error=""):
         <label>Question</label><textarea name='text' maxlength='{MAX_QUESTION_LENGTH}' required>{escape(strip_internal_round_labels(question.get('text', '') or ''))}</textarea>
         <label>Response type</label><select name='question_type'><option value='open' {'selected' if question_type == 'open' else ''}>Free-write response</option><option value='choice' {'selected' if question_type == 'choice' else ''}>Multiple choice</option></select>
         <label>Choices</label><input name='op1' maxlength='{MAX_OPTION_LENGTH}' value='{fields[0]}' placeholder='Choice 1'><input name='op2' maxlength='{MAX_OPTION_LENGTH}' value='{fields[1]}' placeholder='Choice 2'><input name='op3' maxlength='{MAX_OPTION_LENGTH}' value='{fields[2]}' placeholder='Choice 3'><input name='op4' maxlength='{MAX_OPTION_LENGTH}' value='{fields[3]}' placeholder='Choice 4'>
-        <button class='btn btn-ok' type='submit'>Save</button><a class='btn btn-sec' href='/admin?tab={'submissions' if 'suggestion' in action else 'questions'}'>Cancel</a></form>""")
+        <button class='btn btn-ok' type='submit'>Save</button><a class='btn btn-sec' href='{escape(cancel or ('/admin?tab=' + ('submissions' if 'suggestion' in action else 'questions')))}'>Cancel</a></form>""")
 
 
 def dopewars_inventory():
@@ -2006,6 +2007,38 @@ def admin_submissions_html(conn):
     return body
 
 
+def admin_questions_params():
+    params = {}
+    page_no = parse_positive_int(request.args.get("p"))
+    search = re.sub(r"[%_]", "", request.args.get("q", "")).strip()[:100]
+    if page_no > 1:
+        params["p"] = page_no
+    if search:
+        params["q"] = search
+    return params
+
+
+def admin_questions_url(question_id=None):
+    url = url_for("admin", tab="questions", **admin_questions_params())
+    return url + (f"#q{question_id}" if question_id else "")
+
+
+def admin_pager_html(page_no, pages, search):
+    def link(number, label=None):
+        if number == page_no and label is None:
+            return f"<span class='btn btn-ok small'>{number}</span>"
+        return f"<a class='btn btn-sec small' href='/admin?tab=questions&p={number}&q={quote(search)}'>{label or number}</a>"
+    shown = sorted({1, pages, *range(max(1, page_no - 2), min(pages, page_no + 2) + 1)})
+    parts = [link(page_no - 1, "&lsaquo; Previous")] if page_no > 1 else []
+    for index, number in enumerate(shown):
+        if index and number - shown[index - 1] > 1:
+            parts.append("<span class='muted'>&hellip;</span>")
+        parts.append(link(number))
+    if page_no < pages:
+        parts.append(link(page_no + 1, "Next &rsaquo;"))
+    return "<div class='pager'>" + "".join(parts) + "</div>"
+
+
 def admin_questions_html(conn):
     search = re.sub(r"[%_]", "", request.args.get("q", "")).strip()[:100]
     where, params = ("WHERE text LIKE ?", (f"%{search}%",)) if search else ("", ())
@@ -2027,24 +2060,20 @@ def admin_questions_html(conn):
     if not rows:
         html.append("<p class='muted'>No questions found.</p>")
         return "".join(html)
-    html.append(f"<p class='muted'>Showing {offset + 1}-{offset + len(rows)} of {total}, newest first.</p><table class='table'><tr><th>#</th><th>Question</th><th>Action</th></tr>")
+    html.append((admin_pager_html(page_no, pages, search) if pages > 1 else "") + f"<p class='muted'>Showing {offset + 1}-{offset + len(rows)} of {total}, newest first.</p><table class='table'><tr><th>#</th><th>Question</th><th>Action</th></tr>")
+    back = "?" + urlencode({"p": page_no, "q": search}) if page_no > 1 or search else ""
     for question in rows:
         options = "" if question["is_open_text"] else "<div class='opts'>" + " · ".join(escape(option) for option in options_for(question)) + "</div>"
         kind = "Free write" if question["is_open_text"] else "Multiple choice"
         html.append(
-            f"<tr><td>{question['question_number']}</td><td><div>{escape(strip_internal_round_labels(question['text']))}</div>{options}<div class='opts'>{kind}</div></td>"
-            f"<td><div class='admin-row'><a class='btn btn-warn small' href='/admin/edit-question/{question['id']}'>Edit</a>"
-            f"<form method='post' action='/admin/delete-question-number/{question['question_number']}' onsubmit='return confirm(&quot;Delete this question and all its answers?&quot;);'>"
+            f"<tr id='q{question['id']}'><td>{question['question_number']}</td><td><div>{escape(strip_internal_round_labels(question['text']))}</div>{options}<div class='opts'>{kind}</div></td>"
+            f"<td><div class='admin-row'><a class='btn btn-warn small' href='/admin/edit-question/{question['id']}{escape(back)}'>Edit</a>"
+            f"<form method='post' action='/admin/delete-question-number/{question['question_number']}{escape(back)}' onsubmit='return confirm(&quot;Delete this question and all its answers?&quot;);'>"
             "<button class='btn btn-del small'>Delete</button></form></div></td></tr>"
         )
     html.append("</table>")
     if pages > 1:
-        def link(number, label):
-            return f"<a class='btn btn-sec small' href='/admin?tab=questions&p={number}&q={quote(search)}'>{label}</a>"
-        html.append(
-            "<div class='pager'>" + (link(page_no - 1, "Previous") if page_no > 1 else "")
-            + f"<span class='muted'>Page {page_no} of {pages}</span>" + (link(page_no + 1, "Next") if page_no < pages else "") + "</div>"
-        )
+        html.append(admin_pager_html(page_no, pages, search))
     return "".join(html)
 
 
@@ -2439,8 +2468,9 @@ def edit_question(question_id):
             conn.execute("UPDATE questions SET text = ?, is_open_text = ?, op1 = ?, op2 = ?, op3 = ?, op4 = ? WHERE id = ?", (text[:500], is_open, options[0][:200], options[1][:200], options[2][:200], options[3][:200], question_id))
             conn.commit()
             conn.close()
-            return admin_redirect("questions")
-    result = question_form("Edit Question", url_for("edit_question", question_id=question_id), question, error)
+            return redirect(admin_questions_url(question_id))
+    action = url_for("edit_question", question_id=question_id, **admin_questions_params())
+    result = question_form("Edit Question", action, question, error, cancel=admin_questions_url(question_id))
     conn.close()
     return result
 
@@ -2534,7 +2564,7 @@ def delete_question_number(question_number):
             conn.execute("DELETE FROM participant_answers WHERE question_id = ?", (question["id"],))
             conn.execute("DELETE FROM questions WHERE id = ?", (question["id"],))
             conn.commit()
-    return admin_redirect("questions")
+    return redirect(admin_questions_url())
 
 
 @app.route("/admin/delete-response/<int:response_id>", methods=["POST"])
