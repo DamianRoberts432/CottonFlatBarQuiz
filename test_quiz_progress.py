@@ -53,8 +53,14 @@ class QuizProgressTestCase(unittest.TestCase):
         finally:
             conn.close()
 
+    def player_questions(self, client):
+        with client.session_transaction() as session:
+            participant_id = session["participant_id"]
+        with closing(Quiz.db_conn()) as conn:
+            return Quiz.quiz_questions(conn, participant_id)
+
     def answer_question(self, client, index):
-        question = self.approved_questions()[index]
+        question = self.player_questions(client)[index]
         data = {"message": f"Answer {index}", "author": "Tester"} if question["is_open_text"] else {"choice": "1"}
         return client.post(f"/quiz?q={index}", data=data, follow_redirects=True)
 
@@ -118,27 +124,26 @@ class QuizProgressTestCase(unittest.TestCase):
             conn.close()
 
     def test_new_pin_starts_from_first_question(self):
-        first_question = self.approved_questions()[0]["text"]
-
         response = self.client.post("/login", data={"name": "alpha1", "pin": "alpha1", "next": "/quiz"}, follow_redirects=True)
         body = response.get_data(as_text=True)
+        first_question = Quiz.escape(self.player_questions(self.client)[0]["text"])
 
         self.assertEqual(response.status_code, 200)
         self.assertIn("Question 1 of", body)
         self.assertIn(first_question, body)
 
     def test_returning_pin_resumes_at_first_unanswered_question(self):
-        questions = self.approved_questions()
-        first_question = questions[0]["text"]
-        second_question = questions[1]["text"]
-
         first_client = Quiz.app.test_client()
         first_client.post("/login", data={"name": "resume1", "pin": "resume1", "next": "/quiz"}, follow_redirects=True)
+        questions = self.player_questions(first_client)
+        first_question = Quiz.escape(questions[0]["text"])
+        second_question = Quiz.escape(questions[1]["text"])
         response = self.answer_question(first_client, 0)
         body = response.get_data(as_text=True)
 
         self.assertIn(second_question, body)
         self.assertNotIn(first_question, body)
+        self.assertIn("Question 2 of", body)
         self.assertEqual(self.answered_count("RESUME1"), 1)
 
         returning_client = Quiz.app.test_client()
@@ -149,24 +154,63 @@ class QuizProgressTestCase(unittest.TestCase):
         self.assertNotIn(first_question, body)
 
     def test_different_pins_keep_independent_progress(self):
-        questions = self.approved_questions()
-        first_question = questions[0]["text"]
-        second_question = questions[1]["text"]
-
         first_client = Quiz.app.test_client()
         first_client.post("/login", data={"name": "alpha2", "pin": "alpha2", "next": "/quiz"}, follow_redirects=True)
+        alpha = self.player_questions(first_client)
         self.answer_question(first_client, 0)
 
         second_client = Quiz.app.test_client()
         response = second_client.post("/login", data={"name": "beta2", "pin": "beta2", "next": "/quiz"}, follow_redirects=True)
-        self.assertIn(first_question, response.get_data(as_text=True))
+        beta = self.player_questions(second_client)
+        self.assertIn("Question 1 of", response.get_data(as_text=True))
+        self.assertIn(Quiz.escape(beta[0]["text"]), response.get_data(as_text=True))
 
         returning_client = Quiz.app.test_client()
         response = returning_client.post("/login", data={"name": "alpha2", "pin": "alpha2", "next": "/quiz"}, follow_redirects=True)
         body = response.get_data(as_text=True)
 
-        self.assertIn(second_question, body)
-        self.assertNotIn(first_question, body)
+        self.assertIn(Quiz.escape(alpha[1]["text"]), body)
+        self.assertNotIn(Quiz.escape(alpha[0]["text"]), body)
+
+    def test_quiz_order_is_shuffled_per_player_and_stable(self):
+        first_client = Quiz.app.test_client()
+        first_client.post("/login", data={"name": "mix1", "pin": "mix1"})
+        second_client = Quiz.app.test_client()
+        second_client.post("/login", data={"name": "mix2", "pin": "mix2"})
+        numbered = [row["id"] for row in self.approved_questions()]
+        first = [row["id"] for row in self.player_questions(first_client)]
+        second = [row["id"] for row in self.player_questions(second_client)]
+
+        self.assertEqual(sorted(first), sorted(numbered))
+        self.assertNotEqual(first, numbered)
+        self.assertNotEqual(first, second)
+        self.assertEqual(first, [row["id"] for row in self.player_questions(first_client)])
+
+    def test_stale_question_post_does_not_answer_wrong_question(self):
+        client = Quiz.app.test_client()
+        client.post("/login", data={"name": "stale1", "pin": "stale1"})
+        questions = self.player_questions(client)
+        response = client.post("/quiz?q=0", data={"question_id": str(questions[1]["id"]), "message": "x", "choice": "1"})
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(self.answered_count("STALE1"), 0)
+
+    def test_approved_submission_is_asked_first(self):
+        client = Quiz.app.test_client()
+        client.post("/login", data={"name": "sub1", "pin": "sub1"})
+        self.answer_question(client, 0)
+        with closing(Quiz.db_conn()) as conn:
+            conn.execute("INSERT INTO suggestions (text, is_open_text, created_at) VALUES (?, 1, ?)", ("Best late night snack?", Quiz.now()))
+            suggestion_id = conn.execute("SELECT MAX(id) FROM suggestions").fetchone()[0]
+            conn.commit()
+        self.make_admin()
+        self.client.post(f"/admin/approve/{suggestion_id}")
+
+        body = client.get("/quiz", follow_redirects=True).get_data(as_text=True)
+        self.assertIn("Best late night snack?", body)
+        self.assertIn("Question 2 of", body)
+        newcomer = Quiz.app.test_client()
+        newcomer.post("/login", data={"name": "sub2", "pin": "sub2"})
+        self.assertEqual(self.player_questions(newcomer)[0]["text"], "Best late night snack?")
 
     def test_completed_pin_sees_completion_instead_of_repeat_question(self):
         self.trim_questions(1)
