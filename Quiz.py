@@ -4,6 +4,7 @@ from contextlib import closing
 from datetime import datetime
 from html import escape
 from urllib.parse import quote, urlencode
+import hashlib
 import json
 import math
 import os
@@ -486,6 +487,7 @@ def init_db():
     """)
     ensure_column(conn, "questions", "seed_key", "TEXT")
     ensure_column(conn, "questions", "question_number", "INTEGER")
+    ensure_column(conn, "questions", "from_submission", "INTEGER NOT NULL DEFAULT 0")
     ensure_column(conn, "drawing_rounds", "prep_ends_at", "REAL")
     ensure_column(conn, "drawing_rounds", "vote_started_at", "REAL")
     ensure_column(conn, "drawing_rounds", "results_started_at", "REAL")
@@ -732,6 +734,15 @@ def first_unanswered_index(questions, answered_ids):
         if question["id"] not in answered_ids:
             return index
     return None
+
+
+def quiz_questions(conn, participant_id):
+    def order(question):
+        mix = hashlib.sha256(f"{participant_id}:{question['id']}".encode()).hexdigest()
+        if question["from_submission"]:
+            return (0, -question["id"], mix)
+        return (1, 0, mix)
+    return sorted(conn.execute("SELECT * FROM questions WHERE approved = 1").fetchall(), key=order)
 
 
 def complete_quiz_page(message):
@@ -1783,15 +1794,14 @@ def dopewars_reset():
 @app.route("/quiz", methods=["GET", "POST"])
 def quiz():
     conn = db_conn()
-    questions = conn.execute("SELECT * FROM questions WHERE approved = 1 ORDER BY question_number ASC, id ASC").fetchall()
-    if not questions:
-        conn.close()
-        return page("Take Quiz", "<h1>Take Quiz</h1><p>No approved questions yet.</p>")
-
     participant_id = logged_in_participant(conn)
     if not participant_id:
         conn.close()
         return redirect(url_for("login", next=url_for("quiz")))
+    questions = quiz_questions(conn, participant_id)
+    if not questions:
+        conn.close()
+        return page("Take Quiz", "<h1>Take Quiz</h1><p>No approved questions yet.</p>")
 
     answered_ids = {
         row["question_id"]
@@ -1810,7 +1820,8 @@ def quiz():
     if request.method == "GET" and index != resume_index:
         conn.close()
         return redirect(url_for("quiz", q=resume_index))
-    if questions[index]["id"] in answered_ids:
+    posted_id = request.form.get("question_id")
+    if questions[index]["id"] in answered_ids or (posted_id and posted_id != str(questions[index]["id"])):
         conn.close()
         return redirect(url_for("quiz", q=resume_index))
     question = questions[index]
@@ -1845,7 +1856,7 @@ def quiz():
             return complete_quiz_page("Your answer was saved.")
         return redirect(url_for("quiz", q=next_index))
 
-    body = f"<p class='muted'>Question {index + 1} of {len(questions)} · Playing as {escape(session.get('participant_name') or '')} (<a href='/logout'>switch</a>)</p><h1>Take Quiz</h1><div class='question left'><h3>{escape(strip_internal_round_labels(question['text']))}</h3><form method='post' action='{escape(url_for('quiz', q=index))}' class='left'>"
+    body = f"<p class='muted'>Question {len(answered_ids) + 1} of {len(questions)} · Playing as {escape(session.get('participant_name') or '')} (<a href='/logout'>switch</a>)</p><h1>Take Quiz</h1><div class='question left'><h3>{escape(strip_internal_round_labels(question['text']))}</h3><form method='post' action='{escape(url_for('quiz', q=index))}' class='left'><input type='hidden' name='question_id' value='{question['id']}'>"
     if question["is_open_text"]:
         body += "<input name='author' maxlength='80' placeholder='Your name (optional)'><textarea name='message' maxlength='2000' required placeholder='Type your answer here'></textarea>"
     else:
@@ -2512,7 +2523,7 @@ def approve_suggestion(suggestion_id):
         suggestion = conn.execute("SELECT * FROM suggestions WHERE id = ?", (suggestion_id,)).fetchone()
         if suggestion:
             text = strip_internal_round_labels(suggestion["text"])
-            conn.execute("INSERT INTO questions (text, is_open_text, op1, op2, op3, op4, approved, created_at, question_number) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)", (text, suggestion["is_open_text"], suggestion["op1"], suggestion["op2"], suggestion["op3"], suggestion["op4"], now(), next_question_number(conn)))
+            conn.execute("INSERT INTO questions (text, is_open_text, op1, op2, op3, op4, approved, created_at, question_number, from_submission) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, 1)", (text, suggestion["is_open_text"], suggestion["op1"], suggestion["op2"], suggestion["op3"], suggestion["op4"], now(), next_question_number(conn)))
             conn.execute("DELETE FROM suggestions WHERE id = ?", (suggestion_id,))
             conn.commit()
     return admin_redirect("submissions")
