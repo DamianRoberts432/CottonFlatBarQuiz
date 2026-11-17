@@ -133,6 +133,13 @@ On newer Raspberry Pi OS the browser command may be `chromium` instead of `chrom
 
 The TV rotates Dopewars high scores, Drawing with Friends scores and MVPs (most visits) every 12 seconds, and switches to the drawing game during a round. **Admin > TV Screens & Ads** can rename, hide or clear each board, remove single Dopewars scores, and add message screens. Ads uploaded at `/advertise` wait there until the host checks CashApp for payment and taps **Paid: Approve**. A $25 company ad then stays on the TV for 2 months, a $5 shoutout for 1 week, and each one drops off by itself when its time is up. Ad pictures (PNG, JPG, GIF or WebP, up to 3 MB) are stored in `quiz.db`, so they survive updates. **Play as Host** on the admin page lets the host take the quiz and play the games, and the player table has **Rename** for fixing names, **Give Tokens** for adding drink tokens by hand (e.g. someone forgot their PIN and signed up again), and **Delete Player**.
 
+## HELP button
+
+The top of the menu has a red **HELP** button for anyone who needs staff. Pressing it alerts staff straight away, then the page offers optional quick taps (what's wrong, where they are, their phone number) and a **Cancel: I pressed it by mistake** button; every change is sent to staff too. Help alerts never show on the TV.
+
+- **Staff Alerts page** (`/staff`, needs the admin code): open it on your phone while it's on the Cotton Flat Bar Quiz Wi-Fi and tap **Tap to turn on alarm sound** once. It beeps and vibrates while anyone is waiting, until you tap **Handled**. Phones pause web pages when the screen locks, so keep it open with the screen on.
+- **Texts** (free): **Admin > Help Alerts** lists the alert numbers; add a name, number and carrier for each. The Pi emails each number's carrier text address through a Gmail account, using the Pi's dongle internet. Set the Gmail address and an App Password (myaccount.google.com/apppasswords, needs 2-Step Verification) under **Text Sender**, then tap **Send Test Text**. AT&T turned off its text address in 2025, so AT&T numbers only get the Staff Alerts page. Numbers and the Gmail login are saved in `~/.cotton-flat-quiz-help.json` on the Pi, outside the repo.
+
 ## ESP32 secrets
 
 Keep `wifi_secrets.h` local and do not commit credentials.

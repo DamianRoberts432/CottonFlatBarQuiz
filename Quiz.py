@@ -2,6 +2,7 @@ import base64
 from collections import Counter
 from contextlib import closing
 from datetime import datetime
+from email.message import EmailMessage
 from html import escape
 from urllib.parse import quote, urlencode
 import hashlib
@@ -11,6 +12,8 @@ import os
 import random
 import re
 import secrets
+import smtplib
+import ssl
 import sqlite3
 import threading
 import time
@@ -28,6 +31,10 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.environ.get("COTTON_FLAT_DB_PATH", os.path.join(BASE_DIR, "quiz.db"))
 SOURCE_FILE_PATH = os.path.abspath(__file__)
 ADMIN_PASS = os.environ.get("COTTON_FLAT_ADMIN_PASS", "1346")
+# Alert numbers and the Gmail login live outside the repo (quiz.db is tracked in git).
+HELP_SETTINGS_PATH = os.environ.get(
+    "COTTON_FLAT_HELP_SETTINGS", os.path.join(os.path.expanduser("~"), ".cotton-flat-quiz-help.json")
+)
 FLASK_HOST = os.environ.get("FLASK_HOST", "0.0.0.0")
 FLASK_PORT = int(os.environ.get("FLASK_PORT", "5000"))
 PORTAL_PORT = int(os.environ.get("PORTAL_PORT", "0"))
@@ -477,6 +484,12 @@ def init_db():
         );
         CREATE TABLE IF NOT EXISTS tv_screens (key TEXT PRIMARY KEY, title TEXT NOT NULL, enabled INTEGER NOT NULL DEFAULT 1);
         CREATE TABLE IF NOT EXISTS tv_messages (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL, body TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS help_requests (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, created_at TEXT NOT NULL, created_ts REAL NOT NULL,
+            name TEXT NOT NULL, client TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'open',
+            reason TEXT NOT NULL DEFAULT '', area TEXT NOT NULL DEFAULT '', phone TEXT NOT NULL DEFAULT '',
+            text_status TEXT NOT NULL DEFAULT ''
+        );
         CREATE TABLE IF NOT EXISTS dopewars_scores (
             participant_id INTEGER PRIMARY KEY,
             top_score INTEGER NOT NULL,
@@ -567,6 +580,7 @@ BASE_STYLE = """
 <style>
 *{box-sizing:border-box}body{font-family:Arial,sans-serif;background:#0f1115;color:#f4f7ff;padding:20px;margin:0;min-height:100vh;display:flex;justify-content:center}.card{width:min(900px,100%);background:#171b22;border:1px solid #2a3140;border-radius:12px;padding:20px;box-shadow:0 10px 30px rgba(0,0,0,.25)}.left{display:flex;flex-direction:column;gap:12px}.muted{color:#a7b0c0}.error{background:#4a1b1b;border:1px solid #6d2f2f;padding:10px;border-radius:8px;color:#ffd1d1}.notice{background:#182d1e;border:1px solid #2b4e34;padding:10px;border-radius:8px;color:#d7f9d1}.btn{display:inline-block;padding:10px 18px;border-radius:8px;text-decoration:none;color:#fff;font-weight:700;cursor:pointer;border:none;margin:6px 0}.btn-ok{background:#2f7cf6}.btn-sec{background:#2a3140}.btn-warn{background:#d28a00}.btn-del{background:#b62d2d}.btn-buy{background:#c83333}.btn-sell{background:#2f7cf6}.btn-travel{background:#e0b100;color:#171b22}.btn-bank{background:#1f9d5a}.btn-debt{background:#e08400}.btn-reset{background:#c52ecf}.btn-quit{background:#10a9d6}.small{padding:6px 12px;font-size:12px}.question{background:#111821;border:1px solid #2a3140;border-radius:10px;padding:14px}.choice{display:flex;align-items:center;gap:8px;background:#161d2a;padding:10px;border-radius:8px}.resp{background:#121822;border:1px solid #2a3140;padding:10px;border-radius:8px;margin:5px 0}.bar{width:100%;height:12px;background:#1e2430;border-radius:999px;overflow:hidden;margin:8px 0}.fill{height:100%;background:#2f7cf6}.admin-row{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:10px}.bank-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px}textarea,input,select{width:100%;padding:10px;border-radius:8px;border:1px solid #485264;background:#0d1219;color:#f4f7ff}.table{width:100%;border-collapse:collapse}th,td{padding:8px 10px;border-bottom:1px solid #2a3140;text-align:left}h1,h2,h3{margin:0 0 12px}.form{display:flex;flex-direction:column;gap:12px}input[type='radio']{width:auto}a{color:#9ac1ff}.admin-head{display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:8px}.admin-head h1,.admin-head h2{margin:0}.tabs{display:flex;flex-wrap:wrap;gap:6px;margin:14px 0 18px;padding-bottom:10px;border-bottom:2px solid #2a3140}.tab{padding:8px 14px;border-radius:8px;background:#1e2430;color:#cfd8ea;text-decoration:none;font-weight:700}.tab.active{background:#2f7cf6;color:#fff}.admin-row form{margin:0}.admin-row .btn{margin:0}td .admin-row{margin-top:0}.opts{color:#a7b0c0;font-size:13px;margin-top:4px}.pager{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin:12px 0}
 tr:target td{background:#22324d}
+.help-box{text-align:center;margin:0 0 18px;padding:14px;border:2px solid #b62d2d;border-radius:12px;background:#2a1414}.help-box p{margin:0 0 10px;font-weight:700}.help-btn{width:150px;height:150px;border-radius:16px;background:#d91f1f;color:#fff;font-size:36px;font-weight:900;border:4px solid #fff;cursor:pointer;box-shadow:0 6px 18px rgba(217,31,31,.5)}.chip-row{display:flex;flex-wrap:wrap;gap:8px}.chip-row .btn{margin:0}.alert{background:#5a1010;border:2px solid #ff5252;border-radius:12px;padding:14px;margin:10px 0}
 </style>
 """
 
@@ -583,7 +597,10 @@ def page(title, body):
 # Phones joining the hotspot ask a well-known site "is there internet?". The
 # hotspot's DNS sends every name to the Pi, so those checks land here: until a
 # phone opens a quiz page we redirect them to the menu (the sign-in popup
-# opens it), afterwards we answer "online" so the phone stays connected.
+# opens it), afterwards we answer "online" so the phone stays connected. The
+# menu loads CONNECTED_PIXEL_PATH as an image: the OS's own check never loads
+# images, but the popup does, so the phone counts as connected the moment the
+# popup shows the menu (iPhone shows "Done", Android stops asking).
 CAPTIVE_SUCCESS_REPLIES = {
     "/generate_204": (204, ""),
     "/gen_204": (204, ""),
@@ -594,6 +611,8 @@ CAPTIVE_SUCCESS_REPLIES = {
     "/success.txt": (200, "success"),
 }
 CAPTIVE_FREE_PATHS = {"/", "/health"}
+CONNECTED_PIXEL_PATH = "/connected.gif"
+CONNECTED_PIXEL = base64.b64decode("R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7")
 signed_in_clients = {}
 
 
@@ -959,6 +978,13 @@ def dopewars_render_body(state):
     """
 
 
+@app.route(CONNECTED_PIXEL_PATH)
+def connected_pixel():
+    response = Response(CONNECTED_PIXEL, mimetype="image/gif")
+    response.headers["Cache-Control"] = "no-cache, no-store"
+    return response
+
+
 @app.route("/health")
 def health():
     return {"ok": True, "service": "CottonFlatBarQuiz"}, 200
@@ -999,9 +1025,12 @@ def menu():
     with closing(db_conn()) as conn:
         dopewars_scores = dopewars_leaderboard(conn)
     body = [
+        "<div class='help-box'><p>If you need staff to come help you in an emergency, press this button.</p>"
+        "<form method='post' action='/help'><button class='help-btn' type='submit'>HELP</button></form></div>",
         "<h1>🍺 Cotton Flat Bar Quiz</h1>",
         "<p class='muted'>Funny sociology, questionable opinions, and community data.</p>",
         player_line(),
+        f"<img src='{CONNECTED_PIXEL_PATH}' alt='' width='1' height='1' style='position:absolute;opacity:0'>",
         "<a class='btn btn-ok' href='/quiz'>▶ Take Quiz</a>",
         "<a class='btn btn-sec' href='/submit-question'>✍ Submit Question</a>",
         "<a class='btn btn-sec' href='/answers'>📊 Community Answers</a>",
@@ -2098,14 +2127,425 @@ def admin_games_html(conn):
     ) + admin_prompts_html(conn)
 
 
+HELP_CARRIERS = {
+    "tmobile": ("T-Mobile", "tmomail.net"),
+    "verizon": ("Verizon", "vtext.com"),
+    "metro": ("Metro by T-Mobile", "mymetropcs.com"),
+    "uscellular": ("US Cellular", "email.uscc.net"),
+    "boost": ("Boost Mobile", "sms.myboostmobile.com"),
+    "cricket": ("Cricket", "sms.cricketwireless.net"),
+    "googlefi": ("Google Fi", "msg.fi.google.com"),
+    "email": ("Email address instead", ""),
+}
+HELP_REASONS = ("Someone is bothering me", "Medical", "I need a safe ride home", "Other")
+HELP_AREAS = ("Bar", "Patio", "Restrooms", "Parking lot")
+HELP_REPEAT_SECONDS = 60
+HELP_SMTP_HOST = ("smtp.gmail.com", 587)
+help_settings_lock = threading.Lock()
+
+
+def load_help_settings():
+    try:
+        with open(HELP_SETTINGS_PATH, encoding="utf-8") as handle:
+            data = json.load(handle)
+    except (OSError, ValueError):
+        data = {}
+    if not isinstance(data, dict):
+        data = {}
+    data.setdefault("contacts", [])
+    data.setdefault("sender", "")
+    data.setdefault("app_password", "")
+    return data
+
+
+def save_help_settings(data):
+    temp_path = HELP_SETTINGS_PATH + ".tmp"
+    with open(os.open(temp_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w", encoding="utf-8") as handle:
+        json.dump(data, handle, indent=2)
+    os.chmod(temp_path, 0o600)
+    os.replace(temp_path, HELP_SETTINGS_PATH)
+
+
+def normalize_phone(value):
+    digits = re.sub(r"\D", "", value or "")
+    if len(digits) == 11 and digits.startswith("1"):
+        digits = digits[1:]
+    return digits if len(digits) == 10 else ""
+
+
+def format_phone(digits):
+    return f"{digits[:3]}-{digits[3:6]}-{digits[6:]}" if len(digits) == 10 else digits
+
+
+def help_contact_address(contact):
+    if contact["carrier"] == "email":
+        return contact["number"]
+    return f"{contact['number']}@{HELP_CARRIERS[contact['carrier']][1]}"
+
+
+def send_help_texts(text):
+    """Email each alert number's carrier text address; returns a short status for the host."""
+    settings = load_help_settings()
+    addresses = [help_contact_address(contact) for contact in settings["contacts"] if contact.get("carrier") in HELP_CARRIERS]
+    if not addresses:
+        return "No alert numbers set up"
+    if not settings["sender"] or not settings["app_password"]:
+        return "Texts off: Gmail sender not set up"
+    message = EmailMessage()
+    message["From"] = settings["sender"]
+    message["To"] = settings["sender"]
+    message.set_content(text)
+    try:
+        with smtplib.SMTP(*HELP_SMTP_HOST, timeout=20) as smtp:
+            smtp.starttls(context=ssl.create_default_context())
+            smtp.login(settings["sender"], settings["app_password"])
+            refused = smtp.send_message(message, to_addrs=addresses)
+    except (OSError, smtplib.SMTPException) as error:
+        return f"Text failed: {error}"[:200]
+    if refused:
+        return f"Text failed for {', '.join(sorted(refused))}"[:200]
+    return f"Texted {len(addresses)} number{'s' if len(addresses) != 1 else ''} at {datetime.now().strftime('%I:%M %p').lstrip('0')}"
+
+
+def deliver_help_text(request_id, text):
+    status = send_help_texts(text)
+    with closing(db_conn()) as conn:
+        conn.execute("UPDATE help_requests SET text_status = ? WHERE id = ?", (status, request_id))
+        conn.commit()
+
+
+def start_help_text(request_id, text):
+    threading.Thread(target=deliver_help_text, args=(request_id, text), daemon=True).start()
+
+
+def help_time(row):
+    return datetime.fromisoformat(row["created_at"]).strftime("%I:%M %p").lstrip("0")
+
+
+def help_summary(row):
+    parts = [f"HELP at Cotton Flat Bar Quiz: {row['name']} pressed HELP at {help_time(row)}."]
+    if row["reason"]:
+        parts.append(f"Problem: {row['reason']}.")
+    if row["area"]:
+        parts.append(f"Where: {row['area']}.")
+    if row["phone"]:
+        parts.append(f"Call them: {format_phone(row['phone'])}.")
+    return " ".join(parts)
+
+
+def help_request_for_session(conn):
+    request_id = session.get("help_request_id")
+    if not request_id:
+        return None
+    return conn.execute("SELECT * FROM help_requests WHERE id = ?", (request_id,)).fetchone()
+
+
+def open_help_alerts(conn):
+    rows = conn.execute("SELECT * FROM help_requests WHERE status = 'open' ORDER BY id DESC").fetchall()
+    return [
+        {"id": row["id"], "name": row["name"], "time": help_time(row), "reason": row["reason"], "area": row["area"],
+         "phone": format_phone(row["phone"]), "text_status": row["text_status"]}
+        for row in rows
+    ]
+
+
+def help_request_html(row, next_path):
+    details = "".join(
+        f"<div><strong>{label}:</strong> {escape(value)}</div>"
+        for label, value in (("Problem", row["reason"]), ("Where", row["area"]), ("Phone", format_phone(row["phone"])), ("Text", row["text_status"]))
+        if value
+    )
+    action = ""
+    if row["status"] == "open":
+        action = (
+            f"<form method='post' action='/admin/help/{row['id']}/handled'><input type='hidden' name='next' value='{escape(next_path)}'>"
+            "<button class='btn btn-ok small'>Handled</button></form>"
+        )
+    return f"<div class='{'alert' if row['status'] == 'open' else 'question'} left'><strong>{escape(row['name'])} · {help_time(row)} · {escape(row['status'])}</strong>{details}{action}</div>"
+
+
+def admin_help_html(conn):
+    settings = load_help_settings()
+    notice = session.pop("help_notice", "")
+    html = ["<h2>Help Alerts</h2>"]
+    if notice:
+        html.append(f"<div class='notice'>{escape(notice)}</div>")
+    html.append(
+        "<p class='muted'>Open <a href='/staff'>Staff Alerts</a> on your phone while it's on the Cotton Flat Bar Quiz Wi-Fi: it beeps and shows every HELP press. "
+        "Phones pause web pages when the screen locks, so keep that page open with the screen on. The numbers below also get a text when the Pi has internet.</p>"
+    )
+    rows = conn.execute("SELECT * FROM help_requests ORDER BY id DESC LIMIT 20").fetchall()
+    html.extend(help_request_html(row, "/admin?tab=help") for row in rows)
+    if not rows:
+        html.append("<p class='muted'>Nobody has pressed HELP yet.</p>")
+    html.append("<h3>Alert Numbers</h3>")
+    for contact in settings["contacts"]:
+        carrier = HELP_CARRIERS.get(contact.get("carrier"), ("?", ""))[0]
+        shown = contact["number"] if contact.get("carrier") == "email" else format_phone(contact["number"])
+        html.append(
+            f"<form method='post' action='/admin/help/contacts/{escape(contact['id'])}/delete' class='admin-row'>"
+            f"<span>{escape(contact['name'])}: {escape(shown)} ({escape(carrier)})</span><button class='btn btn-del small'>Remove</button></form>"
+        )
+    carrier_options = "".join(f"<option value='{key}'>{escape(label)}</option>" for key, (label, _domain) in HELP_CARRIERS.items())
+    html.append(
+        "<form method='post' action='/admin/help/contacts' class='form question'>"
+        "<input name='name' maxlength='40' required placeholder='Name, e.g. Damian'>"
+        "<input name='number' maxlength='80' required placeholder='Phone number, e.g. 432-994-8830'>"
+        f"<select name='carrier'>{carrier_options}</select>"
+        "<button class='btn btn-ok small'>Add Number</button></form>"
+        "<p class='muted'>Texts are free emails to each carrier's text address, so pick the right carrier. AT&amp;T turned theirs off in 2025; for AT&amp;T numbers use the Staff Alerts page.</p>"
+        "<h3>Text Sender (free Gmail)</h3>"
+        "<p class='muted'>Use a Gmail account with 2-Step Verification on, and an App Password from myaccount.google.com/apppasswords (not the normal password). "
+        "It's saved on the Pi only, outside the quiz files.</p>"
+        "<form method='post' action='/admin/help/sender' class='form question'>"
+        f"<input type='email' name='sender' maxlength='120' placeholder='yourname@gmail.com' value='{escape(settings['sender'])}'>"
+        f"<input type='password' name='app_password' maxlength='60' placeholder='{'App Password saved: leave blank to keep it' if settings['app_password'] else '16-letter App Password'}'>"
+        "<button class='btn btn-ok small'>Save Sender</button></form>"
+        "<form method='post' action='/admin/help/test'><button class='btn btn-warn small'>Send Test Text</button></form>"
+    )
+    return "".join(html)
+
+
+STAFF_SCRIPT = """<script>
+let ctx = null, alarm = null, lastKey = '';
+const list = document.getElementById('list'), status = document.getElementById('status');
+document.getElementById('arm').onclick = () => {
+  ctx = ctx || new (window.AudioContext || window.webkitAudioContext)();
+  ctx.resume(); beep(); document.getElementById('arm').textContent = 'Alarm sound is on';
+};
+function beep(){
+  if(!ctx) return;
+  const osc = ctx.createOscillator(), gain = ctx.createGain();
+  osc.type = 'square'; osc.frequency.value = 880; gain.gain.value = 0.3;
+  osc.connect(gain); gain.connect(ctx.destination); osc.start(); osc.stop(ctx.currentTime + 0.4);
+}
+function esc(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
+function render(alerts){
+  const key = JSON.stringify(alerts);
+  if(key !== lastKey){
+    lastKey = key;
+    list.innerHTML = alerts.map(a => `<div class='alert left'><h2>HELP: ${esc(a.name)} &middot; ${esc(a.time)}</h2>`
+      + (a.reason ? `<div><strong>Problem:</strong> ${esc(a.reason)}</div>` : '')
+      + (a.area ? `<div><strong>Where:</strong> ${esc(a.area)}</div>` : '')
+      + (a.phone ? `<div><strong>Phone:</strong> <a href='tel:${esc(a.phone)}'>${esc(a.phone)}</a></div>` : '')
+      + (a.text_status ? `<div class='muted'>${esc(a.text_status)}</div>` : '')
+      + `<form method='post' action='/admin/help/${a.id}/handled'><input type='hidden' name='next' value='/staff'><button class='btn btn-ok'>Handled</button></form></div>`).join('');
+  }
+  document.title = alerts.length ? `HELP (${alerts.length}) - Staff Alerts` : 'Staff Alerts';
+  if(alerts.length && !alarm){ alarm = setInterval(() => { beep(); if(navigator.vibrate) navigator.vibrate([400, 200, 400]); }, 1500); }
+  if(!alerts.length && alarm){ clearInterval(alarm); alarm = null; }
+}
+async function refresh(){
+  try{
+    const r = await fetch('/staff/alerts', {cache: 'no-store'});
+    if(r.status === 403){ status.textContent = 'Logged out: open Admin and log in again.'; }
+    else { const st = await r.json(); render(st.alerts); status.textContent = st.alerts.length ? 'Someone needs help!' : 'Watching for HELP presses...'; }
+  }catch(e){ status.textContent = 'Lost the quiz Pi: is this phone on the Cotton Flat Bar Quiz Wi-Fi?'; }
+}
+async function poll(){ await refresh(); setTimeout(poll, 2000); }
+list.addEventListener('submit', async e => {
+  e.preventDefault();
+  try{ await fetch(e.target.action, {method: 'POST', body: new FormData(e.target)}); }catch(err){}
+  lastKey = ''; refresh();
+});
+poll();
+</script>"""
+
+
+@app.route("/help", methods=["POST"])
+def help_press():
+    client = request.remote_addr or ""
+    name = session.get("participant_name") or "Someone"
+    with closing(db_conn()) as conn:
+        recent = conn.execute(
+            "SELECT id FROM help_requests WHERE client = ? AND status = 'open' AND created_ts > ? ORDER BY id DESC LIMIT 1",
+            (client, time.time() - HELP_REPEAT_SECONDS),
+        ).fetchone()
+        if recent:
+            request_id = recent["id"]
+        else:
+            request_id = conn.execute(
+                "INSERT INTO help_requests (created_at, created_ts, name, client) VALUES (?, ?, ?, ?)",
+                (now(), time.time(), name, client),
+            ).lastrowid
+            conn.commit()
+            row = conn.execute("SELECT * FROM help_requests WHERE id = ?", (request_id,)).fetchone()
+            start_help_text(request_id, help_summary(row))
+    session["help_request_id"] = request_id
+    return redirect(url_for("help_sent"))
+
+
+@app.route("/help/sent")
+def help_sent():
+    with closing(db_conn()) as conn:
+        row = help_request_for_session(conn)
+    if not row:
+        return redirect(url_for("menu"))
+    if row["status"] != "open":
+        return page("Help", "<h1>Help request closed</h1><p class='muted'>Press HELP on the menu again any time you need staff.</p><a class='btn btn-sec' href='/'>Back to Menu</a>")
+    def chips(field, options, current):
+        return "<div class='chip-row'>" + "".join(
+            f"<form method='post' action='/help/details'><input type='hidden' name='{field}' value='{escape(option)}'>"
+            f"<button class='btn {'btn-ok' if option == current else 'btn-sec'}'>{escape(option)}</button></form>"
+            for option in options
+        ) + "</div>"
+    body = (
+        "<h1>Staff have been alerted</h1>"
+        "<p>Stay where you are if you can. Anything you add below is sent to staff right away (all optional).</p>"
+        f"<div class='question left'><h3>What's wrong?</h3>{chips('reason', HELP_REASONS, row['reason'])}</div>"
+        f"<div class='question left'><h3>Where are you?</h3>{chips('area', HELP_AREAS, row['area'])}"
+        "<form method='post' action='/help/details' class='admin-row'><input name='area' maxlength='60' placeholder='Somewhere else, e.g. pool table' style='width:auto;flex:1'>"
+        "<button class='btn btn-ok small'>Send</button></form></div>"
+        "<div class='question left'><h3>Your phone number</h3><p class='muted'>So staff can call you to find you.</p>"
+        f"<form method='post' action='/help/details' class='admin-row'><input name='phone' type='tel' maxlength='20' placeholder='432-555-1234' value='{escape(format_phone(row['phone']))}' style='width:auto;flex:1'>"
+        "<button class='btn btn-ok small'>Send</button></form></div>"
+        "<form method='post' action='/help/cancel'><button class='btn btn-sec'>Cancel: I pressed it by mistake</button></form>"
+        "<a class='btn btn-sec' href='/'>Back to Menu</a>"
+    )
+    return page("Staff alerted", body)
+
+
+@app.route("/help/details", methods=["POST"])
+def help_details():
+    with closing(db_conn()) as conn:
+        row = help_request_for_session(conn)
+        if not row or row["status"] != "open":
+            return redirect(url_for("help_sent"))
+        updates = {}
+        reason = request.form.get("reason", "")
+        if reason in HELP_REASONS:
+            updates["reason"] = reason
+        area = clean_line(request.form.get("area", ""), 60)
+        if area:
+            updates["area"] = area
+        if "phone" in request.form:
+            phone = normalize_phone(request.form.get("phone"))
+            if phone:
+                updates["phone"] = phone
+        updates = {key: value for key, value in updates.items() if row[key] != value}
+        if updates:
+            conn.execute(
+                f"UPDATE help_requests SET {', '.join(f'{key} = ?' for key in updates)} WHERE id = ?",
+                (*updates.values(), row["id"]),
+            )
+            conn.commit()
+            row = conn.execute("SELECT * FROM help_requests WHERE id = ?", (row["id"],)).fetchone()
+            start_help_text(row["id"], "Update: " + help_summary(row))
+    return redirect(url_for("help_sent"))
+
+
+@app.route("/help/cancel", methods=["POST"])
+def help_cancel():
+    with closing(db_conn()) as conn:
+        row = help_request_for_session(conn)
+        if row and row["status"] == "open":
+            conn.execute("UPDATE help_requests SET status = 'cancelled' WHERE id = ?", (row["id"],))
+            conn.commit()
+            start_help_text(row["id"], f"Cancelled: {row['name']} pressed HELP at {help_time(row)} by mistake.")
+    session.pop("help_request_id", None)
+    return page("Help", "<h1>Help request cancelled</h1><p class='muted'>Staff have been told it was a mistake.</p><a class='btn btn-sec' href='/'>Back to Menu</a>")
+
+
+@app.route("/staff")
+def staff_alerts():
+    if not admin_required():
+        return redirect(url_for("admin"))
+    body = (
+        "<h1>Staff Alerts</h1>"
+        "<p class='muted'>Keep this page open on your phone while it's on the Cotton Flat Bar Quiz Wi-Fi, with the screen on. "
+        "Tap the button once so it can beep.</p>"
+        "<button id='arm' class='btn btn-warn' type='button'>Tap to turn on alarm sound</button>"
+        "<div id='status' class='notice'>Watching for HELP presses...</div><div id='list'></div>"
+        "<a class='btn btn-sec small' href='/admin?tab=help'>Help Alerts settings</a>"
+    )
+    return page("Staff Alerts", body + STAFF_SCRIPT)
+
+
+@app.route("/staff/alerts")
+def staff_alerts_state():
+    if not admin_required():
+        return {"error": "admin login needed"}, 403
+    with closing(db_conn()) as conn:
+        return {"alerts": open_help_alerts(conn)}
+
+
+@app.route("/admin/help/<int:request_id>/handled", methods=["POST"])
+def admin_help_handled(request_id):
+    blocked = require_admin()
+    if blocked:
+        return blocked
+    with closing(db_conn()) as conn:
+        conn.execute("UPDATE help_requests SET status = 'handled' WHERE id = ? AND status = 'open'", (request_id,))
+        conn.commit()
+    return redirect(safe_next(request.form.get("next") or "/admin?tab=help"))
+
+
+@app.route("/admin/help/contacts", methods=["POST"])
+def admin_help_add_contact():
+    blocked = require_admin()
+    if blocked:
+        return blocked
+    name = clean_line(request.form.get("name", ""), 40)
+    carrier = request.form.get("carrier", "")
+    raw_number = request.form.get("number", "").strip()
+    number = raw_number if carrier == "email" else normalize_phone(raw_number)
+    if carrier not in HELP_CARRIERS or not name or not number or (carrier == "email" and not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", number)):
+        session["help_notice"] = "Couldn't add that: enter a name and a 10-digit phone number (or a full email address)."
+        return admin_redirect("help")
+    with help_settings_lock:
+        settings = load_help_settings()
+        settings["contacts"].append({"id": secrets.token_hex(4), "name": name, "number": number, "carrier": carrier})
+        save_help_settings(settings)
+    session["help_notice"] = f"Added {name}."
+    return admin_redirect("help")
+
+
+@app.route("/admin/help/contacts/<contact_id>/delete", methods=["POST"])
+def admin_help_delete_contact(contact_id):
+    blocked = require_admin()
+    if blocked:
+        return blocked
+    with help_settings_lock:
+        settings = load_help_settings()
+        settings["contacts"] = [contact for contact in settings["contacts"] if contact.get("id") != contact_id]
+        save_help_settings(settings)
+    return admin_redirect("help")
+
+
+@app.route("/admin/help/sender", methods=["POST"])
+def admin_help_sender():
+    blocked = require_admin()
+    if blocked:
+        return blocked
+    with help_settings_lock:
+        settings = load_help_settings()
+        settings["sender"] = request.form.get("sender", "").strip()[:120]
+        password = re.sub(r"\s", "", request.form.get("app_password", ""))
+        if password:
+            settings["app_password"] = password
+        save_help_settings(settings)
+    session["help_notice"] = "Sender saved. Tap Send Test Text to check it."
+    return admin_redirect("help")
+
+
+@app.route("/admin/help/test", methods=["POST"])
+def admin_help_test():
+    blocked = require_admin()
+    if blocked:
+        return blocked
+    session["help_notice"] = send_help_texts("Test from Cotton Flat Bar Quiz: HELP texts are working.")
+    return admin_redirect("help")
+
+
 ADMIN_QUESTIONS_PER_PAGE = 25
-ADMIN_TAB_LABELS = {"players": "Players & Tokens", "questions": "Questions", "submissions": "Submissions", "tv": "TV Screens & Ads", "games": "Games & Prompts"}
+ADMIN_TAB_LABELS = {"help": "Help Alerts", "players": "Players & Tokens", "questions": "Questions", "submissions": "Submissions", "tv": "TV Screens & Ads", "games": "Games & Prompts"}
 ADMIN_TAB_RENDERERS = {
     "players": admin_players_html,
     "questions": admin_questions_html,
     "submissions": admin_submissions_html,
     "tv": lambda conn: admin_ads_html(conn) + admin_tv_html(conn),
     "games": admin_games_html,
+    "help": admin_help_html,
 }
 
 
@@ -2126,6 +2566,7 @@ def admin():
         counts = {
             "questions": conn.execute("SELECT COUNT(*) FROM questions").fetchone()[0],
             "submissions": conn.execute("SELECT COUNT(*) FROM suggestions").fetchone()[0],
+            "help": conn.execute("SELECT COUNT(*) FROM help_requests WHERE status = 'open'").fetchone()[0],
         }
         content = ADMIN_TAB_RENDERERS[tab](conn)
     nav = "".join(
