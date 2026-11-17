@@ -25,6 +25,7 @@ class QuizProgressTestCase(unittest.TestCase):
         Quiz.SOURCE_FILE_PATH = str(self.source_path)
         Quiz.app.config["TESTING"] = True
         Quiz.DELETED_SEED_QUESTION_NUMBERS[:] = []
+        Quiz.HELP_SETTINGS_PATH = str(Path(TEST_DB_DIR.name) / f"{self._testMethodName}-help.json")
         Quiz.init_db()
         self.client = Quiz.app.test_client()
 
@@ -34,6 +35,8 @@ class QuizProgressTestCase(unittest.TestCase):
         if self.source_path.exists():
             self.source_path.unlink()
         Quiz.SOURCE_FILE_PATH = Quiz.__file__
+        if os.path.exists(Quiz.HELP_SETTINGS_PATH):
+            os.unlink(Quiz.HELP_SETTINGS_PATH)
         Quiz.DELETED_SEED_QUESTION_NUMBERS[:] = []
 
     def approved_questions(self):
@@ -884,6 +887,91 @@ class QuizProgressTestCase(unittest.TestCase):
             admin.post(f"/admin/ads/{ids['Taco Shack']}/delete")
             with closing(Quiz.db_conn()) as conn:
                 self.assertEqual(conn.execute("SELECT COUNT(*) FROM ads").fetchone()[0], 1)
+
+
+    def admin_client(self):
+        client = Quiz.app.test_client()
+        with client.session_transaction() as session:
+            session["is_admin"] = True
+        return client
+
+    def help_row(self):
+        with closing(Quiz.db_conn()) as conn:
+            return conn.execute("SELECT * FROM help_requests ORDER BY id DESC LIMIT 1").fetchone()
+
+    def test_menu_has_help_button_at_the_top(self):
+        menu = self.client.get("/").get_data(as_text=True)
+        self.assertIn("If you need staff to come help you in an emergency, press this button.", menu)
+        self.assertLess(menu.index("help-btn"), menu.index("Cotton Flat Bar Quiz</h1>"))
+        self.assertNotIn("911", menu)
+
+    def test_help_press_texts_alert_numbers_with_details(self):
+        admin = self.admin_client()
+        admin.post("/admin/help/contacts", data={"name": "Damian", "number": "(432) 994-8830", "carrier": "tmobile"})
+        admin.post("/admin/help/sender", data={"sender": "bar@gmail.com", "app_password": "abcd efgh ijkl mnop"})
+        self.client.post("/login", data={"name": "Jess", "pin": "1111", "next": "/"})
+        with patch.object(Quiz, "start_help_text", Quiz.deliver_help_text), patch.object(Quiz.smtplib, "SMTP") as smtp:
+            sent = self.client.post("/help", follow_redirects=True).get_data(as_text=True)
+            self.assertIn("Staff have been alerted", sent)
+            self.assertNotIn("911", sent)
+            server = smtp.return_value.__enter__.return_value
+            server.login.assert_called_with("bar@gmail.com", "abcdefghijklmnop")
+            message, = server.send_message.call_args.args
+            self.assertEqual(server.send_message.call_args.kwargs["to_addrs"], ["4329948830@tmomail.net"])
+            self.assertIn("Jess pressed HELP", message.get_content())
+
+            self.client.post("/help")
+            with closing(Quiz.db_conn()) as conn:
+                self.assertEqual(conn.execute("SELECT COUNT(*) FROM help_requests").fetchone()[0], 1)
+
+            self.client.post("/help/details", data={"reason": "Someone is bothering me"})
+            self.client.post("/help/details", data={"area": "Patio"})
+            self.client.post("/help/details", data={"phone": "432 555 1234"})
+            last_text = server.send_message.call_args.args[0].get_content()
+            self.assertIn("Problem: Someone is bothering me.", last_text)
+            self.assertIn("Where: Patio.", last_text)
+            self.assertIn("Call them: 432-555-1234.", last_text)
+            self.assertIn("Texted 1 number", self.help_row()["text_status"])
+
+            self.client.post("/help/cancel")
+            self.assertEqual(self.help_row()["status"], "cancelled")
+            self.assertIn("by mistake", server.send_message.call_args.args[0].get_content())
+
+    def test_staff_alerts_page_shows_open_help_until_handled(self):
+        self.assertEqual(self.client.get("/staff").status_code, 302)
+        self.assertEqual(self.client.get("/staff/alerts").status_code, 403)
+        with patch.object(Quiz, "start_help_text"):
+            self.client.post("/help")
+            self.client.post("/help/details", data={"area": "Restrooms"})
+        admin = self.admin_client()
+        self.assertIn("Tap to turn on alarm sound", admin.get("/staff").get_data(as_text=True))
+        alerts = admin.get("/staff/alerts").get_json()["alerts"]
+        self.assertEqual([(alert["name"], alert["area"]) for alert in alerts], [("Someone", "Restrooms")])
+        self.assertIn("Help Alerts (1)", admin.get("/admin?tab=help").get_data(as_text=True))
+        response = admin.post(f"/admin/help/{alerts[0]['id']}/handled", data={"next": "/staff"})
+        self.assertEqual(response.headers["Location"], "/staff")
+        self.assertEqual(admin.get("/staff/alerts").get_json()["alerts"], [])
+        self.assertNotIn("Restrooms", self.client.get("/tv/state").get_data(as_text=True))
+
+    def test_admin_manages_alert_numbers_outside_the_repo(self):
+        admin = self.admin_client()
+        admin.post("/admin/help/contacts", data={"name": "Damian", "number": "432-994-8830", "carrier": "verizon"})
+        admin.post("/admin/help/contacts", data={"name": "Bad", "number": "12", "carrier": "verizon"})
+        admin.post("/admin/help/sender", data={"sender": "bar@gmail.com", "app_password": "secretpass"})
+        admin.post("/admin/help/sender", data={"sender": "bar@gmail.com", "app_password": ""})
+        settings = Quiz.load_help_settings()
+        self.assertEqual([(c["name"], c["number"]) for c in settings["contacts"]], [("Damian", "4329948830")])
+        self.assertEqual(settings["app_password"], "secretpass")
+        page = admin.get("/admin?tab=help").get_data(as_text=True)
+        self.assertIn("432-994-8830 (Verizon)", page)
+        self.assertNotIn("secretpass", page)
+        admin.post(f"/admin/help/contacts/{settings['contacts'][0]['id']}/delete")
+        self.assertEqual(Quiz.load_help_settings()["contacts"], [])
+        self.assertFalse(Path(Quiz.HELP_SETTINGS_PATH).resolve().is_relative_to(Path(Quiz.__file__).resolve().parent))
+        with patch.object(Quiz.smtplib, "SMTP") as smtp:
+            admin.post("/admin/help/test")
+            smtp.assert_not_called()
+        self.assertIn("No alert numbers set up", admin.get("/admin?tab=help").get_data(as_text=True))
 
 
 if __name__ == "__main__":
