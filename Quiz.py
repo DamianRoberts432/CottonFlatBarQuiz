@@ -2335,14 +2335,19 @@ function render(alerts){
   if(alerts.length && !alarm){ alarm = setInterval(() => { beep(); if(navigator.vibrate) navigator.vibrate([400, 200, 400]); }, 1500); }
   if(!alerts.length && alarm){ clearInterval(alarm); alarm = null; }
 }
-async function poll(){
+async function refresh(){
   try{
     const r = await fetch('/staff/alerts', {cache: 'no-store'});
     if(r.status === 403){ status.textContent = 'Logged out: open Admin and log in again.'; }
     else { const st = await r.json(); render(st.alerts); status.textContent = st.alerts.length ? 'Someone needs help!' : 'Watching for HELP presses...'; }
   }catch(e){ status.textContent = 'Lost the quiz Pi: is this phone on the Cotton Flat Bar Quiz Wi-Fi?'; }
-  setTimeout(poll, 2000);
 }
+async function poll(){ await refresh(); setTimeout(poll, 2000); }
+list.addEventListener('submit', async e => {
+  e.preventDefault();
+  try{ await fetch(e.target.action, {method: 'POST', body: new FormData(e.target)}); }catch(err){}
+  lastKey = ''; refresh();
+});
 poll();
 </script>"""
 

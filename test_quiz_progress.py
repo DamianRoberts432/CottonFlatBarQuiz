@@ -915,7 +915,9 @@ class QuizProgressTestCase(unittest.TestCase):
             self.assertIn("Staff have been alerted", sent)
             self.assertNotIn("911", sent)
             server = smtp.return_value.__enter__.return_value
+            server.send_message.return_value = {}
             server.login.assert_called_with("bar@gmail.com", "abcdefghijklmnop")
+            self.assertIsNotNone(server.starttls.call_args.kwargs["context"])
             message, = server.send_message.call_args.args
             self.assertEqual(server.send_message.call_args.kwargs["to_addrs"], ["4329948830@tmomail.net"])
             self.assertIn("Jess pressed HELP", message.get_content())
