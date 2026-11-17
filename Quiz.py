@@ -13,6 +13,7 @@ import random
 import re
 import secrets
 import smtplib
+import ssl
 import sqlite3
 import threading
 import time
@@ -2196,7 +2197,7 @@ def send_help_texts(text):
     message.set_content(text)
     try:
         with smtplib.SMTP(*HELP_SMTP_HOST, timeout=20) as smtp:
-            smtp.starttls()
+            smtp.starttls(context=ssl.create_default_context())
             smtp.login(settings["sender"], settings["app_password"])
             smtp.send_message(message, to_addrs=addresses)
     except (OSError, smtplib.SMTPException) as error:
