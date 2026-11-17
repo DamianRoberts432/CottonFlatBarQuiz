@@ -2199,9 +2199,11 @@ def send_help_texts(text):
         with smtplib.SMTP(*HELP_SMTP_HOST, timeout=20) as smtp:
             smtp.starttls(context=ssl.create_default_context())
             smtp.login(settings["sender"], settings["app_password"])
-            smtp.send_message(message, to_addrs=addresses)
+            refused = smtp.send_message(message, to_addrs=addresses)
     except (OSError, smtplib.SMTPException) as error:
         return f"Text failed: {error}"[:200]
+    if refused:
+        return f"Text failed for {', '.join(sorted(refused))}"[:200]
     return f"Texted {len(addresses)} number{'s' if len(addresses) != 1 else ''} at {datetime.now().strftime('%I:%M %p').lstrip('0')}"
 
 
