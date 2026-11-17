@@ -583,7 +583,10 @@ def page(title, body):
 # Phones joining the hotspot ask a well-known site "is there internet?". The
 # hotspot's DNS sends every name to the Pi, so those checks land here: until a
 # phone opens a quiz page we redirect them to the menu (the sign-in popup
-# opens it), afterwards we answer "online" so the phone stays connected.
+# opens it), afterwards we answer "online" so the phone stays connected. The
+# menu loads CONNECTED_PIXEL_PATH as an image: the OS's own check never loads
+# images, but the popup does, so the phone counts as connected the moment the
+# popup shows the menu (iPhone shows "Done", Android stops asking).
 CAPTIVE_SUCCESS_REPLIES = {
     "/generate_204": (204, ""),
     "/gen_204": (204, ""),
@@ -594,6 +597,8 @@ CAPTIVE_SUCCESS_REPLIES = {
     "/success.txt": (200, "success"),
 }
 CAPTIVE_FREE_PATHS = {"/", "/health"}
+CONNECTED_PIXEL_PATH = "/connected.gif"
+CONNECTED_PIXEL = base64.b64decode("R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7")
 signed_in_clients = {}
 
 
@@ -959,6 +964,13 @@ def dopewars_render_body(state):
     """
 
 
+@app.route(CONNECTED_PIXEL_PATH)
+def connected_pixel():
+    response = Response(CONNECTED_PIXEL, mimetype="image/gif")
+    response.headers["Cache-Control"] = "no-cache, no-store"
+    return response
+
+
 @app.route("/health")
 def health():
     return {"ok": True, "service": "CottonFlatBarQuiz"}, 200
@@ -1002,6 +1014,7 @@ def menu():
         "<h1>🍺 Cotton Flat Bar Quiz</h1>",
         "<p class='muted'>Funny sociology, questionable opinions, and community data.</p>",
         player_line(),
+        f"<img src='{CONNECTED_PIXEL_PATH}' alt='' width='1' height='1' style='position:absolute;opacity:0'>",
         "<a class='btn btn-ok' href='/quiz'>▶ Take Quiz</a>",
         "<a class='btn btn-sec' href='/submit-question'>✍ Submit Question</a>",
         "<a class='btn btn-sec' href='/answers'>📊 Community Answers</a>",

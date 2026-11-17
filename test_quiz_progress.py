@@ -643,6 +643,18 @@ class QuizProgressTestCase(unittest.TestCase):
         self.assertIn("Success", self.client.get("/hotspot-detect.html", headers={"Host": "captive.apple.com"}).get_data(as_text=True))
         self.assertEqual(self.client.get("/anything", headers={"Host": "example.com"}).status_code, 302)
         Quiz.signed_in_clients.clear()
+
+    def test_menu_popup_marks_phone_connected_right_away(self):
+        Quiz.signed_in_clients.clear()
+        menu = self.client.get("/").get_data(as_text=True)
+        self.assertIn(Quiz.CONNECTED_PIXEL_PATH, menu)
+        self.assertEqual(self.client.get("/generate_204", headers={"Host": "connectivitycheck.gstatic.com"}).status_code, 302)
+        pixel = self.client.get(Quiz.CONNECTED_PIXEL_PATH)
+        self.assertEqual((pixel.status_code, pixel.mimetype), (200, "image/gif"))
+        self.assertEqual(self.client.get("/generate_204", headers={"Host": "connectivitycheck.gstatic.com"}).status_code, 204)
+        self.assertIn("Success", self.client.get("/hotspot-detect.html", headers={"Host": "captive.apple.com"}).get_data(as_text=True))
+        Quiz.signed_in_clients.clear()
+
     def test_name_login_is_protected_by_pin_and_hides_pin(self):
         owner = Quiz.app.test_client()
         response = owner.post("/login", data={"name": "Big Dan", "pin": "4321", "next": "/"}, follow_redirects=True)
