@@ -2160,7 +2160,7 @@ def load_help_settings():
 
 def save_help_settings(data):
     temp_path = HELP_SETTINGS_PATH + ".tmp"
-    with open(temp_path, "w", encoding="utf-8") as handle:
+    with open(os.open(temp_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w", encoding="utf-8") as handle:
         json.dump(data, handle, indent=2)
     os.chmod(temp_path, 0o600)
     os.replace(temp_path, HELP_SETTINGS_PATH)
