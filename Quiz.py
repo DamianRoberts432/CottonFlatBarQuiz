@@ -595,7 +595,8 @@ def page(title, body):
 
 
 # Phones joining the hotspot ask a well-known site "is there internet?". The
-# hotspot's DNS sends every name to the Pi, so those checks land here: until a
+# hotspot's DNS sends those check sites to the Pi (everything else goes out
+# through the dongle's shared internet), so the checks land here: until a
 # phone opens a quiz page we redirect them to the menu (the sign-in popup
 # opens it), afterwards we answer "online" so the phone stays connected. The
 # menu loads CONNECTED_PIXEL_PATH as an image: the OS's own check never loads
