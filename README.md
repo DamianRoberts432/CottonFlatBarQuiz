@@ -135,7 +135,7 @@ The TV rotates Dopewars high scores, Drawing with Friends scores and MVPs (most 
 
 ## HELP button
 
-The top of the menu has a red **HELP** button for anyone who needs staff. Pressing it alerts staff straight away, then the page offers optional quick taps (what's wrong, where they are, their phone number) and a **Cancel: I pressed it by mistake** button; every change is sent to staff too. Help alerts never show on the TV.
+The top of the menu and of the name-and-PIN sign-in page has a red **HELP** button for anyone who needs staff; it works without signing in. Pressing it alerts staff straight away, then the page offers optional quick taps (what's wrong, where they are, their phone number) and a **Cancel: I pressed it by mistake** button; every change is sent to staff too. Help alerts never show on the TV.
 
 - **Staff Alerts page** (`/staff`, needs the admin code): open it on your phone while it's on the Cotton Flat Bar Quiz Wi-Fi and tap **Tap to turn on alarm sound** once. It beeps and vibrates while anyone is waiting, until you tap **Handled**. Phones pause web pages when the screen locks, so keep it open with the screen on.
 - **Texts** (free): **Admin > Help Alerts** lists the alert numbers; add a name, number and carrier for each. The Pi emails each number's carrier text address through a Gmail account, using the Pi's dongle internet. Set the Gmail address and an App Password (myaccount.google.com/apppasswords, needs 2-Step Verification) under **Text Sender**, then tap **Send Test Text**. AT&T turned off its text address in 2025, so AT&T numbers only get the Staff Alerts page. Numbers and the Gmail login are saved in `~/.cotton-flat-quiz-help.json` on the Pi, outside the repo.
