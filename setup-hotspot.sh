@@ -57,11 +57,12 @@ if ! command -v dnsmasq >/dev/null 2>&1; then
 fi
 
 # Any older hotspot settings (e.g. one made by hand) would fight over the Wi-Fi card.
-nmcli -t -f NAME,TYPE connection show | while IFS=: read -r name type; do
+nmcli -t -f UUID,TYPE connection show | while IFS=: read -r uuid type; do
+    name="$(nmcli -g connection.id connection show "$uuid")"
     if [ "$type" = "802-11-wireless" ] && [ "$name" != "$CON" ] &&
-       [ "$(nmcli -g 802-11-wireless.mode connection show "$name")" = "ap" ]; then
+       [ "$(nmcli -g 802-11-wireless.mode connection show "$uuid")" = "ap" ]; then
         echo "Removing old hotspot settings: $name"
-        nmcli connection delete "$name" >/dev/null
+        nmcli connection delete "$uuid" >/dev/null
     fi
 done
 
