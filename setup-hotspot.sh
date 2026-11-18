@@ -47,10 +47,15 @@ nmcli connection add type wifi ifname "$IFACE" con-name "$CON" autoconnect yes s
     802-11-wireless.mode ap 802-11-wireless.band bg 802-11-wireless.channel 6 \
     ipv4.method shared ipv4.addresses 192.168.4.1/24 ipv6.method disabled
 
-# Every name a phone looks up points at the Pi, so the phone's "is there internet?"
-# check reaches the quiz and the sign-in popup opens the menu.
+# Phones share the dongle's internet (ipv4.method shared), so Android shows
+# "Connected" instead of "No internet". Only the phones' "is there internet?"
+# check sites point at the Pi, so the sign-in popup still opens the quiz menu.
+PROBE_HOSTS="connectivitycheck.gstatic.com connectivitycheck.android.com clients3.google.com
+connect.rom.miui.com connectivitycheck.platform.hicloud.com captive.apple.com
+www.msftconnecttest.com www.msftncsi.com detectportal.firefox.com"
 mkdir -p /etc/NetworkManager/dnsmasq-shared.d
-echo "address=/#/192.168.4.1" > /etc/NetworkManager/dnsmasq-shared.d/cotton-flat-quiz.conf
+for host in $PROBE_HOSTS; do echo "address=/$host/192.168.4.1"; done \
+    > /etc/NetworkManager/dnsmasq-shared.d/cotton-flat-quiz.conf
 
 install -m 644 "$REPO_DIR/cotton-flat-quiz.service" /etc/systemd/system/cotton-flat-quiz.service
 systemctl daemon-reload

@@ -97,7 +97,7 @@ sudo bash setup-hotspot.sh
 
 The script refuses to run if the built-in Wi-Fi is the Pi's only internet connection. Unplug the ESP32 afterwards so two networks don't share the same name.
 
-The hotspot answers every name lookup with `192.168.4.1`, and the quiz also listens on port 80 (`PORTAL_PORT=80` in `cotton-flat-quiz.service`). A phone's "is there internet?" check is redirected to `http://192.168.4.1/`, so the sign-in popup opens the main menu. Once the phone opens any quiz page, its next check gets a success reply, so the popup shows **Done** and the phone stays connected.
+Phones on the hotspot share the dongle's internet, so Android shows **Connected** instead of "No internet". Only the phones' "is there internet?" check sites (Android, iPhone, Windows, Firefox) point at `192.168.4.1`, and the quiz also listens on port 80 (`PORTAL_PORT=80` in `cotton-flat-quiz.service`). A phone's "is there internet?" check is redirected to `http://192.168.4.1/`, so the sign-in popup opens the main menu. Once the phone opens any quiz page, its next check gets a success reply, so the popup shows **Done** and the phone stays connected.
 
 `esp32_portal.ino` is the old ESP32 version of this and is no longer needed.
 
