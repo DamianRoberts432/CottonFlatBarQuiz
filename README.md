@@ -89,13 +89,13 @@ sudo systemctl restart cotton-flat-quiz.service
 
 ## Wi-Fi hotspot (Pi, no ESP32)
 
-The Pi's built-in Wi-Fi broadcasts the open network **Cotton Flat Bar Quiz** and the Pi is `192.168.4.1` on it. The USB Wi-Fi dongle stays connected to the bar's internet, so Raspberry Pi Connect keeps working. Set it up once, from the repo folder on the Pi:
+One of the Pi's Wi-Fi cards broadcasts the open network **Cotton Flat Bar Quiz** and the Pi is `192.168.4.1` on it; the other stays connected to the bar's internet, so Raspberry Pi Connect keeps working. The built-in Wi-Fi is the hotspot unless it is the one on the internet, then the USB dongle is (or name it: `sudo bash setup-hotspot.sh wlan1`). Older hotspot settings on the Pi are replaced. Set it up once, from the repo folder on the Pi:
 
 ```bash
 sudo bash setup-hotspot.sh
 ```
 
-The script refuses to run if the built-in Wi-Fi is the Pi's only internet connection. Unplug the ESP32 afterwards so two networks don't share the same name.
+The script refuses to run if the hotspot card is the Pi's only internet connection. Unplug the ESP32 afterwards so two networks don't share the same name.
 
 Phones on the hotspot share the dongle's internet, so Android shows **Connected** instead of "No internet". Only the phones' "is there internet?" check sites (Android, iPhone, Windows, Firefox) point at `192.168.4.1`, and the quiz also listens on port 80 (`PORTAL_PORT=80` in `cotton-flat-quiz.service`). A phone's "is there internet?" check is redirected to `http://192.168.4.1/`, so the sign-in popup opens the main menu. Once the phone opens any quiz page, its next check gets a success reply, so the popup shows **Done** and the phone stays connected.
 

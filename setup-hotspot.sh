@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# One-time setup: the Pi's built-in Wi-Fi becomes the open "Cotton Flat Bar Quiz"
-# hotspot at 192.168.4.1 (replacing the ESP32). The USB Wi-Fi dongle keeps the
-# Pi's internet and Raspberry Pi Connect. Run: sudo bash setup-hotspot.sh
+# One-time setup: one Wi-Fi card becomes the open "Cotton Flat Bar Quiz" hotspot at
+# 192.168.4.1 and the other keeps the Pi's internet and Raspberry Pi Connect. The
+# built-in Wi-Fi is the hotspot unless it is the one on the internet, then the USB
+# dongle is. Run: sudo bash setup-hotspot.sh   (or: sudo bash setup-hotspot.sh wlan1)
 set -euo pipefail
 
 SSID="Cotton Flat Bar Quiz"
@@ -13,18 +14,37 @@ if [ "$(id -u)" -ne 0 ]; then
     exit 1
 fi
 
+on_internet() {
+    ip route show default | grep -q "dev $1 "
+}
+
 IFACE="${1:-}"
 if [ -z "$IFACE" ]; then
+    BUILTIN=""
+    OTHERS=""
     for dev in /sys/class/net/wl*; do
+        [ -e "$dev" ] || continue
         if readlink "$dev/device/driver" 2>/dev/null | grep -q brcmfmac; then
-            IFACE="$(basename "$dev")"
+            BUILTIN="$(basename "$dev")"
+        else
+            OTHERS="$OTHERS $(basename "$dev")"
         fi
     done
+    IFACE="$BUILTIN"
+    if [ -n "$BUILTIN" ] && on_internet "$BUILTIN"; then
+        for dev in $OTHERS; do
+            if ! on_internet "$dev"; then
+                IFACE="$dev"
+                break
+            fi
+        done
+    fi
 fi
 if [ -z "$IFACE" ]; then
-    echo "Could not find the Pi's built-in Wi-Fi. Run: nmcli device   then: sudo bash setup-hotspot.sh <name>"
+    echo "Could not find the Pi's Wi-Fi. Run: nmcli device   then: sudo bash setup-hotspot.sh <name>"
     exit 1
 fi
+echo "Using $IFACE for the \"$SSID\" hotspot."
 
 if ! ip route show default | grep -v "dev $IFACE " | grep -q default; then
     echo "Only $IFACE is connected to the internet. Connect the USB dongle to the internet first,"
@@ -35,6 +55,16 @@ fi
 if ! command -v dnsmasq >/dev/null 2>&1; then
     apt-get install -y dnsmasq-base
 fi
+
+# Any older hotspot settings (e.g. one made by hand) would fight over the Wi-Fi card.
+nmcli -t -f UUID,TYPE connection show | while IFS=: read -r uuid type; do
+    name="$(nmcli -g connection.id connection show "$uuid")"
+    if [ "$type" = "802-11-wireless" ] && [ "$name" != "$CON" ] &&
+       [ "$(nmcli -g 802-11-wireless.mode connection show "$uuid")" = "ap" ]; then
+        echo "Removing old hotspot settings: $name"
+        nmcli connection delete "$uuid" >/dev/null
+    fi
+done
 
 # The old profile that joined the ESP32's network must not grab the built-in Wi-Fi back.
 if nmcli -t -f NAME connection show | grep -Fxq "$SSID"; then
