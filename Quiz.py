@@ -609,6 +609,7 @@ CAPTIVE_SUCCESS_REPLIES = {
     "/connecttest.txt": (200, "Microsoft Connect Test"),
     "/ncsi.txt": (200, "Microsoft NCSI"),
     "/success.txt": (200, "success"),
+    "/canonical.html": (200, '<meta http-equiv="refresh" content="0;url=https://support.mozilla.org/kb/captive-portal"/>'),
 }
 CAPTIVE_FREE_PATHS = {"/", "/health"}
 CONNECTED_PIXEL_PATH = "/connected.gif"
@@ -726,10 +727,16 @@ def safe_next(value):
     return value if value.startswith("/") and not value.startswith("//") else "/"
 
 
+HELP_BOX = (
+    "<div class='help-box'><p>If you need staff to come help you in an emergency, press this button.</p>"
+    "<form method='post' action='/help'><button class='help-btn' type='submit'>HELP</button></form></div>"
+)
+
+
 def login_form(next_path, error="", name=""):
     error_html = f"<div class='error'>{escape(error)}</div>" if error else ""
     return (
-        "<h1>Who's playing?</h1><p class='muted'>Pick a name and a PIN (4+ letters or numbers). Use the same name and PIN next time to keep your quiz progress, drink tokens and high scores. Only your name is ever shown.</p>"
+        f"{HELP_BOX}<h1>Who's playing?</h1><p class='muted'>Pick a name and a PIN (4+ letters or numbers). Use the same name and PIN next time to keep your quiz progress, drink tokens and high scores. Only your name is ever shown.</p>"
         f"{error_html}<form method='post' action='{escape(url_for('login'))}'><input type='hidden' name='next' value='{escape(next_path)}'>"
         f"<input name='name' maxlength='{PLAYER_NAME_MAX_LENGTH}' required placeholder='Your name' value='{escape(name)}'>"
         "<input name='pin' type='password' maxlength='20' minlength='4' required pattern='[A-Za-z0-9]+' placeholder='PIN'>"
@@ -1025,8 +1032,7 @@ def menu():
     with closing(db_conn()) as conn:
         dopewars_scores = dopewars_leaderboard(conn)
     body = [
-        "<div class='help-box'><p>If you need staff to come help you in an emergency, press this button.</p>"
-        "<form method='post' action='/help'><button class='help-btn' type='submit'>HELP</button></form></div>",
+        HELP_BOX,
         "<h1>🍺 Cotton Flat Bar Quiz</h1>",
         "<p class='muted'>Funny sociology, questionable opinions, and community data.</p>",
         player_line(),

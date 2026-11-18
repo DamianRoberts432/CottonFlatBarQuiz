@@ -905,6 +905,16 @@ class QuizProgressTestCase(unittest.TestCase):
         self.assertLess(menu.index("help-btn"), menu.index("Cotton Flat Bar Quiz</h1>"))
         self.assertNotIn("911", menu)
 
+    def test_sign_in_page_has_help_button_before_the_name_form(self):
+        for path in ("/login", "/login?next=/quiz"):
+            page = self.client.get(path).get_data(as_text=True)
+            self.assertIn("If you need staff to come help you in an emergency, press this button.", page)
+            self.assertLess(page.index("help-btn"), page.index("name='name'"))
+        self.assertEqual(self.client.get("/quiz").headers["Location"].split("?")[0], "/login")
+        pressed = self.client.post("/help")
+        self.assertEqual(pressed.status_code, 302)
+        self.assertIn("Staff have been alerted", self.client.get("/help/sent").get_data(as_text=True))
+
     def test_help_press_texts_alert_numbers_with_details(self):
         admin = self.admin_client()
         admin.post("/admin/help/contacts", data={"name": "Damian", "number": "(432) 994-8830", "carrier": "tmobile"})
