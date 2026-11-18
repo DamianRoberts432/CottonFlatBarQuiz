@@ -658,6 +658,17 @@ class QuizProgressTestCase(unittest.TestCase):
         self.assertIn("Success", self.client.get("/hotspot-detect.html", headers={"Host": "captive.apple.com"}).get_data(as_text=True))
         Quiz.signed_in_clients.clear()
 
+    def test_quiet_phone_is_forgotten_so_it_gets_the_popup_again(self):
+        Quiz.signed_in_clients.clear()
+        Quiz.client_last_seen.clear()
+        probe = {"Host": "connectivitycheck.gstatic.com"}
+        self.client.get(Quiz.CONNECTED_PIXEL_PATH)
+        self.assertEqual(self.client.get("/generate_204", headers=probe).status_code, 204)
+        with patch.object(Quiz.time, "time", return_value=Quiz.time.time() + Quiz.CAPTIVE_FORGET_SECONDS + 5):
+            self.assertEqual(self.client.get("/generate_204", headers=probe).status_code, 302)
+        Quiz.signed_in_clients.clear()
+        Quiz.client_last_seen.clear()
+
     def test_name_login_is_protected_by_pin_and_hides_pin(self):
         owner = Quiz.app.test_client()
         response = owner.post("/login", data={"name": "Big Dan", "pin": "4321", "next": "/"}, follow_redirects=True)
@@ -948,6 +959,18 @@ class QuizProgressTestCase(unittest.TestCase):
             self.client.post("/help/cancel")
             self.assertEqual(self.help_row()["status"], "cancelled")
             self.assertIn("by mistake", server.send_message.call_args.args[0].get_content())
+
+    def test_tv_warns_the_bar_while_help_is_open_without_naming_anyone(self):
+        self.assertEqual(self.client.get("/tv/state").get_json()["help"], 0)
+        self.assertIn("Someone has asked staff for help", self.client.get("/tv").get_data(as_text=True))
+        self.client.post("/login", data={"name": "Jake", "pin": "1234"})
+        self.client.post("/help")
+        self.client.post("/help/details", data={"area": "Patio"})
+        state = self.client.get("/tv/state").get_json()
+        self.assertEqual(state["help"], 1)
+        self.assertNotIn("Patio", str(state))
+        self.client.post("/help/cancel")
+        self.assertEqual(self.client.get("/tv/state").get_json()["help"], 0)
 
     def test_staff_alerts_page_shows_open_help_until_handled(self):
         self.assertEqual(self.client.get("/staff").status_code, 302)

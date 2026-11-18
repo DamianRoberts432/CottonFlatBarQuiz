@@ -600,7 +600,9 @@ def page(title, body):
 # opens it), afterwards we answer "online" so the phone stays connected. The
 # menu loads CONNECTED_PIXEL_PATH as an image: the OS's own check never loads
 # images, but the popup does, so the phone counts as connected the moment the
-# popup shows the menu (iPhone shows "Done", Android stops asking).
+# popup shows the menu (iPhone shows "Done", Android stops asking). A phone
+# that has been quiet for CAPTIVE_FORGET_SECONDS is forgotten, so when it
+# rejoins the Wi-Fi later it gets the popup again.
 CAPTIVE_SUCCESS_REPLIES = {
     "/generate_204": (204, ""),
     "/gen_204": (204, ""),
@@ -614,7 +616,9 @@ CAPTIVE_SUCCESS_REPLIES = {
 CAPTIVE_FREE_PATHS = {"/", "/health"}
 CONNECTED_PIXEL_PATH = "/connected.gif"
 CONNECTED_PIXEL = base64.b64decode("R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7")
+CAPTIVE_FORGET_SECONDS = 3 * 60
 signed_in_clients = {}
+client_last_seen = {}
 
 
 def is_quiz_host(host):
@@ -632,12 +636,18 @@ def is_quiz_host(host):
 
 @app.before_request
 def captive_portal():
+    client = request.remote_addr
+    current = time.time()
+    last_seen = client_last_seen.get(client, 0)
+    client_last_seen[client] = current
+    if current - last_seen > CAPTIVE_FORGET_SECONDS:
+        signed_in_clients.pop(client, None)
     if is_quiz_host(request.host):
         if request.path not in CAPTIVE_FREE_PATHS and not request.path.startswith("/tv"):
-            signed_in_clients[request.remote_addr] = time.time()
+            signed_in_clients[client] = current
         return None
     reply = CAPTIVE_SUCCESS_REPLIES.get(request.path)
-    if reply and request.remote_addr in signed_in_clients:
+    if reply and client in signed_in_clients:
         status, text = reply
         response = Response(text, status=status, mimetype="text/html" if text.startswith("<") else "text/plain")
     else:
@@ -1070,8 +1080,10 @@ th{color:#a7b0c0;font-size:2.8vh}td.score{color:#80efad;font-weight:bold;text-al
 .timer{font-size:22vh;font-weight:bold;color:#ffd54a;line-height:1}.art{max-height:62vh;max-width:90vw;border-radius:12px;background:#fff;margin:1vh 0}
 .chips{display:flex;flex-wrap:wrap;gap:1.5vh;justify-content:center;margin:3vh 0}.chip{background:#6a3fb5;padding:1.2vh 2.5vw;border-radius:999px;font-size:3.5vh}
 .adimg{max-height:62vh;max-width:90vw;border-radius:12px}
+#helpbar{display:none;position:fixed;top:0;left:0;right:0;z-index:9;background:#d91f1f;color:#fff;font-size:5vh;font-weight:900;padding:2vh 3vw;text-align:center;animation:flash 1s steps(1) infinite}
+#helpbar small{display:block;font-size:3vh;font-weight:700}@keyframes flash{50%{background:#7a0000}}
 .grid{display:flex;flex-wrap:wrap;gap:3vh;justify-content:center;margin:2vh 0}.cell{position:relative}.cell img{height:30vh;max-width:28vw;background:#fff;border-radius:10px}.cell img.win{height:55vh;max-width:80vw}.num{position:absolute;top:-1.5vh;left:-1.5vh;background:#ffd54a;color:#111;font-weight:bold;font-size:5vh;border-radius:999px;padding:0 2vh}
-</style></head><body><div id='app'><h1>🍺 Cotton Flat Bar Quiz</h1></div>
+</style></head><body><div id='helpbar'>&#9888; Someone has asked staff for help<small>Please stay alert and look out for each other.</small></div><div id='app'><h1>🍺 Cotton Flat Bar Quiz</h1></div>
 <script>
 const app = document.getElementById('app');
 function esc(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
@@ -1111,6 +1123,7 @@ function renderDrawing(st){
   return h;
 }
 function render(st){
+  document.getElementById('helpbar').style.display = st.help ? 'block' : 'none';
   const html = st.mode=='drawing' ? renderDrawing(st) : renderScores(st);
   if(st.mode=='drawing') deadline = Date.now() + st.seconds_left*1000;
   if(html !== lastHtml){ app.innerHTML = html; lastHtml = html; }
@@ -1269,10 +1282,11 @@ def tv():
 @app.route("/tv/state")
 def tv_state():
     with closing(db_conn()) as conn:
+        help_open = conn.execute("SELECT COUNT(*) FROM help_requests WHERE status = 'open'").fetchone()[0]
         state = drawing_state(conn)
         if state["phase"] != "none":
-            return {"mode": "drawing", **state}
-        return {"mode": "scores", "boards": tv_boards(conn)}
+            return {"mode": "drawing", "help": help_open, **state}
+        return {"mode": "scores", "help": help_open, "boards": tv_boards(conn)}
 
 
 def clock():
